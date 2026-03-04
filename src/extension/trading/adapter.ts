@@ -215,7 +215,7 @@ IMPORTANT: If result is an empty array [], you have no holdings.`,
     // ==================== Quote (query, optional source) ====================
 
     getQuote: tool({
-      description: `Query the latest quote/price for a stock symbol.
+      description: `Query the latest quote/price for a symbol.
 
 Returns real-time market data from the broker:
 - last: last traded price
@@ -224,20 +224,25 @@ Returns real-time market data from the broker:
 
 Use this to check current prices before placing orders.`,
       inputSchema: z.object({
-        symbol: z.string().describe('Ticker symbol, e.g. "AAPL", "SPY"'),
-        source: z
-          .string()
-          .optional()
-          .describe(sourceDesc(false, 'If omitted, uses the first available account.')),
+        symbol: z.string().describe('Ticker symbol, e.g. "AAPL", "SPY", "BTC/USDT"'),
+        source: z.string().optional().describe(sourceDesc(false)),
       }),
       execute: async ({ symbol, source }) => {
         const targets = resolveAccounts(accountManager, source)
         if (targets.length === 0) return { error: 'No accounts available.' }
 
-        // Use first available account
-        const { account, id } = targets[0]
-        const quote = await account.getQuote({ symbol })
-        return { source: id, ...quote }
+        const results: Array<Record<string, unknown>> = []
+        for (const { account, id } of targets) {
+          try {
+            const quote = await account.getQuote({ symbol })
+            results.push({ source: id, ...quote })
+          } catch {
+            // Skip accounts that don't support this symbol
+          }
+        }
+
+        if (results.length === 0) return { error: `No account could quote symbol "${symbol}".` }
+        return results.length === 1 ? results[0] : results
       },
     }),
 
