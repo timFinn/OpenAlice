@@ -63,6 +63,7 @@ export class CcxtAccount implements ITradingAccount {
   private exchangeName: string
   private defaultMarketType: 'spot' | 'swap'
   private initialized = false
+  private readonly readOnly: boolean
 
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
@@ -73,6 +74,7 @@ export class CcxtAccount implements ITradingAccount {
     this.id = config.id ?? `${config.exchange}-main`
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
     this.defaultMarketType = config.defaultMarketType
+    this.readOnly = !config.apiKey || !config.apiSecret
 
     const exchanges = ccxt as unknown as Record<string, new (opts: Record<string, unknown>) => Exchange>
     const ExchangeClass = exchanges[config.exchange]
@@ -107,8 +109,9 @@ export class CcxtAccount implements ITradingAccount {
         this.initialized = true
 
         const marketCount = Object.keys(this.exchange.markets).length
+        const mode = this.readOnly ? ', read-only (no API keys)' : ''
         console.log(
-          `CcxtAccount[${this.id}]: connected (${this.exchangeName}, ${marketCount} markets loaded)`,
+          `CcxtAccount[${this.id}]: connected (${this.exchangeName}, ${marketCount} markets loaded${mode})`,
         )
         return
       } catch (err) {
@@ -195,6 +198,7 @@ export class CcxtAccount implements ITradingAccount {
 
   async placeOrder(order: OrderRequest): Promise<OrderResult> {
     this.ensureInit()
+    this.ensureWritable()
 
     const ccxtSymbol = this.contractToCcxt(order.contract)
     if (!ccxtSymbol) {
@@ -260,6 +264,7 @@ export class CcxtAccount implements ITradingAccount {
 
   async cancelOrder(orderId: string): Promise<boolean> {
     this.ensureInit()
+    this.ensureWritable()
 
     try {
       const ccxtSymbol = this.orderSymbolCache.get(orderId)
@@ -272,6 +277,7 @@ export class CcxtAccount implements ITradingAccount {
 
   async closePosition(contract: Contract, qty?: number): Promise<OrderResult> {
     this.ensureInit()
+    this.ensureWritable()
 
     const positions = await this.getPositions()
     const symbol = contract.symbol?.toUpperCase()
@@ -299,6 +305,7 @@ export class CcxtAccount implements ITradingAccount {
 
   async getAccount(): Promise<AccountInfo> {
     this.ensureInit()
+    this.ensureWritable()
 
     const [balance, rawPositions] = await Promise.all([
       this.exchange.fetchBalance(),
@@ -328,6 +335,7 @@ export class CcxtAccount implements ITradingAccount {
 
   async getPositions(): Promise<Position[]> {
     this.ensureInit()
+    this.ensureWritable()
 
     const raw = await this.exchange.fetchPositions()
     const result: Position[] = []
@@ -366,6 +374,7 @@ export class CcxtAccount implements ITradingAccount {
 
   async getOrders(): Promise<Order[]> {
     this.ensureInit()
+    this.ensureWritable()
 
     const allOrders: CcxtOrder[] = []
 
@@ -495,6 +504,7 @@ export class CcxtAccount implements ITradingAccount {
 
   async adjustLeverage(contract: Contract, leverage: number): Promise<{ success: boolean; error?: string }> {
     this.ensureInit()
+    this.ensureWritable()
 
     const ccxtSymbol = this.contractToCcxt(contract)
     if (!ccxtSymbol) return { success: false, error: 'Cannot resolve contract to CCXT symbol' }
@@ -512,6 +522,14 @@ export class CcxtAccount implements ITradingAccount {
   private ensureInit(): void {
     if (!this.initialized) {
       throw new Error(`CcxtAccount[${this.id}] not initialized. Call init() first.`)
+    }
+  }
+
+  private ensureWritable(): void {
+    if (this.readOnly) {
+      throw new Error(
+        `CcxtAccount[${this.id}] is in read-only mode (no API keys). This operation requires authentication.`,
+      )
     }
   }
 
