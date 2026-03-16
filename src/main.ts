@@ -517,7 +517,6 @@ async function main() {
   const ctx: EngineContext = {
     config, connectorCenter, agentCenter, eventLog, heartbeat, cronEngine, toolCenter,
     accountManager,
-    getAccountGit: (id: string) => accountManager.get(id)?.git,
     reconnectAccount,
     reconnectConnectors,
   }

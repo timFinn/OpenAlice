@@ -96,25 +96,25 @@ export function createTradingRoutes(ctx: EngineContext) {
   // ==================== Per-account wallet/git routes ====================
 
   app.get('/accounts/:id/wallet/log', (c) => {
-    const git = ctx.getAccountGit(c.req.param('id'))
-    if (!git) return c.json({ error: 'Account or wallet not found' }, 404)
+    const uta = ctx.accountManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
     const limit = Number(c.req.query('limit')) || 20
     const symbol = c.req.query('symbol') || undefined
-    return c.json({ commits: git.log({ limit, symbol }) })
+    return c.json({ commits: uta.log({ limit, symbol }) })
   })
 
   app.get('/accounts/:id/wallet/show/:hash', (c) => {
-    const git = ctx.getAccountGit(c.req.param('id'))
-    if (!git) return c.json({ error: 'Account or wallet not found' }, 404)
-    const commit = git.show(c.req.param('hash'))
+    const uta = ctx.accountManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    const commit = uta.show(c.req.param('hash'))
     if (!commit) return c.json({ error: 'Commit not found' }, 404)
     return c.json(commit)
   })
 
   app.get('/accounts/:id/wallet/status', (c) => {
-    const git = ctx.getAccountGit(c.req.param('id'))
-    if (!git) return c.json({ error: 'Account or wallet not found' }, 404)
-    return c.json(git.status())
+    const uta = ctx.accountManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    return c.json(uta.status())
   })
 
   return app
