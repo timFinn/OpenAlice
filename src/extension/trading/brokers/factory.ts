@@ -1,12 +1,45 @@
 /**
- * Platform Factory — creates IPlatform and ITradingAccount from config.
+ * Broker Factory — creates broker instances from config.
+ *
+ * IPlatform defines HOW to connect (exchange type, sandbox, etc.).
+ * Multiple accounts can share one platform, each with individual credentials.
  */
 
-import type { IPlatform, PlatformCredentials } from './platform.js'
-import type { ITradingAccount } from './interfaces.js'
-import { CcxtPlatform } from './providers/ccxt/CcxtPlatform.js'
-import { AlpacaPlatform } from './providers/alpaca/AlpacaPlatform.js'
-import type { PlatformConfig, AccountConfig } from '../../core/config.js'
+import type { IBroker } from './types.js'
+import { CcxtPlatform } from './ccxt/CcxtPlatform.js'
+import { AlpacaPlatform } from './alpaca/AlpacaPlatform.js'
+import type { PlatformConfig, AccountConfig } from '../../../core/config.js'
+
+// ==================== Platform ====================
+
+/** Credentials passed to IPlatform.createAccount(). */
+export interface PlatformCredentials {
+  id: string
+  label?: string
+  apiKey?: string
+  apiSecret?: string
+  password?: string
+}
+
+export interface IPlatform {
+  /** Unique platform id, e.g. "bybit-swap", "alpaca-paper". */
+  readonly id: string
+
+  /** Human-readable name, e.g. "Bybit USDT Perps". */
+  readonly label: string
+
+  /**
+   * Provider class tag. Matches IBroker.provider on created accounts.
+   * CcxtPlatform → exchange name (e.g. "bybit").
+   * AlpacaPlatform → "alpaca".
+   */
+  readonly providerType: string
+
+  /** Create a new IBroker instance from per-account credentials. */
+  createAccount(credentials: PlatformCredentials): IBroker
+}
+
+// ==================== Config → Platform/Broker helpers ====================
 
 /** Create an IPlatform from a parsed PlatformConfig. */
 export function createPlatformFromConfig(config: PlatformConfig): IPlatform {
@@ -30,11 +63,11 @@ export function createPlatformFromConfig(config: PlatformConfig): IPlatform {
   }
 }
 
-/** Create an ITradingAccount from a platform + account config. */
-export function createAccountFromConfig(
+/** Create an IBroker from a platform + account config. */
+export function createBrokerFromConfig(
   platform: IPlatform,
   accountConfig: AccountConfig,
-): ITradingAccount {
+): IBroker {
   const credentials: PlatformCredentials = {
     id: accountConfig.id,
     label: accountConfig.label,

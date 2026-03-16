@@ -13,8 +13,8 @@
  *   expect(conn.calls[0].payload.text).toBe('hello')
  */
 
-import type { Connector, ConnectorCapabilities, SendPayload, SendResult } from './types.js'
-import type { StreamableResult } from '../core/ai-provider-manager.js'
+import type { Connector, ConnectorCapabilities, SendPayload, SendResult } from '../types.js'
+import type { StreamableResult } from '../../core/ai-provider-manager.js'
 
 export interface MockConnectorCall {
   method: 'send' | 'sendStream'

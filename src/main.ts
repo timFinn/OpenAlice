@@ -10,15 +10,15 @@ import { McpAskPlugin } from './connectors/mcp-ask/index.js'
 import { createThinkingTools } from './extension/thinking-kit/index.js'
 import {
   AccountManager,
-  CcxtAccount,
+  UnifiedTradingAccount,
+  CcxtBroker,
   createCcxtProviderTools,
-  wireAccountTrading,
   createTradingTools,
   createPlatformFromConfig,
-  createAccountFromConfig,
+  createBrokerFromConfig,
   validatePlatformRefs,
 } from './extension/trading/index.js'
-import type { AccountSetup, GitExportState, ITradingGit, IPlatform } from './extension/trading/index.js'
+import type { GitExportState, IPlatform } from './extension/trading/index.js'
 import { Brain, createBrainTools } from './extension/brain/index.js'
 import type { BrainExportState } from './extension/brain/index.js'
 import { createBrowserTools } from './extension/browser/index.js'
@@ -109,8 +109,6 @@ async function main() {
   // ==================== Trading Account Manager ====================
 
   const accountManager = new AccountManager()
-  // Mutable map: accountId → setup. Needed for reconnect (re-wiring) and git lookups.
-  const accountSetups = new Map<string, AccountSetup>()
 
   // ==================== Platform-driven Account Init ====================
 
@@ -126,23 +124,23 @@ async function main() {
     accountCfg: { id: string; platformId: string; guards: Array<{ type: string; options: Record<string, unknown> }> },
     platform: IPlatform,
   ): Promise<boolean> {
-    const account = createAccountFromConfig(platform, accountCfg)
+    const broker = createBrokerFromConfig(platform, accountCfg)
     try {
-      await account.init()
+      await broker.init()
     } catch (err) {
       console.warn(`trading: ${accountCfg.id} init failed (non-fatal):`, err)
       return false
     }
     const savedState = await loadGitState(accountCfg.id)
     const filePath = gitFilePath(accountCfg.id)
-    const setup = wireAccountTrading(account, {
+    const uta = new UnifiedTradingAccount(broker, {
       guards: accountCfg.guards,
       savedState,
       onCommit: createGitPersister(filePath),
+      platformId: accountCfg.platformId,
     })
-    accountManager.addAccount(account, accountCfg.platformId)
-    accountSetups.set(account.id, setup)
-    console.log(`trading: ${account.label} initialized`)
+    accountManager.add(uta)
+    console.log(`trading: ${uta.label} initialized`)
     return true
   }
 
@@ -262,11 +260,7 @@ async function main() {
 
   // One unified set of trading tools — routes via `source` parameter at runtime
   toolCenter.register(
-    createTradingTools({
-      accountManager,
-      getGit: (id) => accountSetups.get(id)?.git,
-      getGitState: (id) => accountSetups.get(id)?.getGitState(),
-    }),
+    createTradingTools(accountManager),
     'trading',
   )
 
@@ -359,11 +353,10 @@ async function main() {
       const freshTrading = await loadTradingConfig()
 
       // Close old account
-      const currentAccount = accountManager.getAccount(accountId)
-      if (currentAccount) {
-        await currentAccount.close()
-        accountManager.removeAccount(accountId)
-        accountSetups.delete(accountId)
+      const currentUta = accountManager.get(accountId)
+      if (currentUta) {
+        await currentUta.close()
+        accountManager.remove(accountId)
       }
 
       // Find this account in fresh config
@@ -391,16 +384,12 @@ async function main() {
       // Re-register CCXT-specific tools if this is a CCXT account
       if (platform.providerType !== 'alpaca') {
         toolCenter.register(
-          createCcxtProviderTools({
-            accountManager,
-            getGit: (id) => accountSetups.get(id)?.git,
-            getGitState: (id) => accountSetups.get(id)?.getGitState(),
-          }),
+          createCcxtProviderTools(accountManager),
           'trading-ccxt',
         )
       }
 
-      const label = accountManager.getAccount(accountId)?.label ?? accountId
+      const label = accountManager.get(accountId)?.label ?? accountId
       console.log(`reconnect: ${label} online`)
       return { success: true, message: `${label} reconnected` }
     } catch (err) {
@@ -528,7 +517,6 @@ async function main() {
   const ctx: EngineContext = {
     config, connectorCenter, agentCenter, eventLog, heartbeat, cronEngine, toolCenter,
     accountManager,
-    getAccountGit: (id: string): ITradingGit | undefined => accountSetups.get(id)?.git,
     reconnectAccount,
     reconnectConnectors,
   }
@@ -545,17 +533,11 @@ async function main() {
   // CCXT-specific tools so the next agent call picks them up automatically.
   ccxtInitPromise.then(() => {
     // Check if any CCXT accounts were successfully registered
-    const hasCcxt = Array.from(accountSetups.values()).some(
-      (s) => s.account instanceof CcxtAccount,
-    )
+    const hasCcxt = accountManager.resolve().some((uta) => uta.broker instanceof CcxtBroker)
     if (!hasCcxt) return
 
     toolCenter.register(
-      createCcxtProviderTools({
-        accountManager,
-        getGit: (id) => accountSetups.get(id)?.git,
-        getGitState: (id) => accountSetups.get(id)?.getGitState(),
-      }),
+      createCcxtProviderTools(accountManager),
       'trading-ccxt',
     )
     console.log('ccxt: provider tools registered')

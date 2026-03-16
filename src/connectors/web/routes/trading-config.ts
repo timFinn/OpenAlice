@@ -143,9 +143,9 @@ export function createTradingConfigRoutes(ctx: EngineContext) {
       await writeAccountsConfig(filtered)
       // Close running account instance if any
       if (ctx.accountManager.has(id)) {
-        const account = ctx.accountManager.getAccount(id)
-        ctx.accountManager.removeAccount(id)
-        try { await account?.close() } catch { /* best effort */ }
+        const uta = ctx.accountManager.get(id)
+        ctx.accountManager.remove(id)
+        try { await uta?.close() } catch { /* best effort */ }
       }
       return c.json({ success: true })
     } catch (err) {

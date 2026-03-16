@@ -1,11 +1,14 @@
 /**
  * Trading-as-Git type definitions
  *
- * Unified git-like state management for tracking trading operation history.
- * Merges crypto-trading/wallet/types.ts and securities-trading/wallet/types.ts.
+ * Operation is a discriminated union — each variant carries typed IBKR objects.
+ * No more Record<string, unknown> type erasure.
  */
 
-import type { Position, Order } from '../interfaces.js'
+import type { Contract, Order, OrderCancel, Execution, OrderState } from '@traderalice/ibkr'
+import type Decimal from 'decimal.js'
+import type { Position, OpenOrder } from '../brokers/types.js'
+import '../contract-ext.js'
 
 // ==================== Commit Hash ====================
 
@@ -14,17 +17,14 @@ export type CommitHash = string
 
 // ==================== Operation ====================
 
-export type OperationAction =
-  | 'placeOrder'
-  | 'modifyOrder'
-  | 'closePosition'
-  | 'cancelOrder'
-  | 'syncOrders'
+export type OperationAction = Operation['action']
 
-export interface Operation {
-  action: OperationAction
-  params: Record<string, unknown>
-}
+export type Operation =
+  | { action: 'placeOrder'; contract: Contract; order: Order }
+  | { action: 'modifyOrder'; orderId: string; changes: Partial<Order> }
+  | { action: 'closePosition'; contract: Contract; quantity?: Decimal }
+  | { action: 'cancelOrder'; orderId: string; orderCancel?: OrderCancel }
+  | { action: 'syncOrders' }
 
 // ==================== Operation Result ====================
 
@@ -35,22 +35,22 @@ export interface OperationResult {
   success: boolean
   orderId?: string
   status: OperationStatus
-  filledPrice?: number
-  filledQty?: number
+  execution?: Execution
+  orderState?: OrderState
   error?: string
   raw?: unknown
 }
 
 // ==================== Wallet State ====================
 
-/** State snapshot taken after each commit. Uses unified Position/Order types. */
+/** State snapshot taken after each commit. */
 export interface GitState {
-  cash: number
-  equity: number
+  netLiquidation: number
+  totalCashValue: number
   unrealizedPnL: number
   realizedPnL: number
   positions: Position[]
-  pendingOrders: Order[]
+  pendingOrders: OpenOrder[]
 }
 
 // ==================== Commit ====================
@@ -150,8 +150,8 @@ export interface SimulationPositionCurrent {
   symbol: string
   side: 'long' | 'short'
   qty: number
-  avgEntryPrice: number
-  currentPrice: number
+  avgCost: number
+  marketPrice: number
   unrealizedPnL: number
   marketValue: number
 }
@@ -160,7 +160,7 @@ export interface SimulationPositionAfter {
   symbol: string
   side: 'long' | 'short'
   qty: number
-  avgEntryPrice: number
+  avgCost: number
   simulatedPrice: number
   unrealizedPnL: number
   marketValue: number
@@ -188,5 +188,18 @@ export interface SimulatePriceChangeResult {
     equityChange: number
     equityChangePercent: string
     worstCase: string
+  }
+}
+
+// ==================== Operation Helpers ====================
+
+/** Extract the symbol from any Operation variant. */
+export function getOperationSymbol(op: Operation): string {
+  switch (op.action) {
+    case 'placeOrder': return op.contract?.symbol || op.contract?.aliceId || 'unknown'
+    case 'modifyOrder': return 'unknown' // modifyOrder doesn't carry contract
+    case 'closePosition': return op.contract?.symbol || op.contract?.aliceId || 'unknown'
+    case 'cancelOrder': return 'unknown'
+    case 'syncOrders': return 'unknown'
   }
 }

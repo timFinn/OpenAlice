@@ -1,114 +1,108 @@
 /**
- * Mock ITradingAccount for testing.
+ * Mock IBroker for testing.
  *
  * All methods are vi.fn() so callers can override return values or inspect calls.
  */
 
 import { vi } from 'vitest'
-import type { Contract, ContractDescription, ContractDetails } from '../contract.js'
+import Decimal from 'decimal.js'
+import { Contract, ContractDescription, ContractDetails, Order, OrderState } from '@traderalice/ibkr'
 import type {
-  ITradingAccount,
+  IBroker,
   AccountCapabilities,
   AccountInfo,
   Position,
-  Order,
-  OrderRequest,
-  OrderResult,
+  PlaceOrderResult,
+  OpenOrder,
   Quote,
   MarketClock,
-} from '../interfaces.js'
+} from '../brokers/types.js'
+import '../contract-ext.js'
 
 // ==================== Defaults ====================
 
 export const DEFAULT_ACCOUNT_INFO: AccountInfo = {
-  cash: 100_000,
-  equity: 105_000,
+  netLiquidation: 105_000,
+  totalCashValue: 100_000,
   unrealizedPnL: 5_000,
   realizedPnL: 1_000,
-  portfolioValue: 105_000,
   buyingPower: 200_000,
 }
 
 export const DEFAULT_CAPABILITIES: AccountCapabilities = {
   supportedSecTypes: ['STK'],
-  supportedOrderTypes: ['market', 'limit', 'stop', 'stop_limit'],
+  supportedOrderTypes: ['MKT', 'LMT', 'STP', 'STP LMT'],
 }
 
-export function makeContract(overrides: Partial<Contract> = {}): Contract {
-  return {
-    aliceId: 'mock-AAPL',
-    symbol: 'AAPL',
-    secType: 'STK',
-    exchange: 'NASDAQ',
-    currency: 'USD',
-    ...overrides,
-  }
+export function makeContract(overrides: Partial<Contract> & { aliceId?: string } = {}): Contract {
+  const c = new Contract()
+  c.aliceId = overrides.aliceId ?? 'mock-AAPL'
+  c.symbol = overrides.symbol ?? 'AAPL'
+  c.secType = overrides.secType ?? 'STK'
+  c.exchange = overrides.exchange ?? 'NASDAQ'
+  c.currency = overrides.currency ?? 'USD'
+  return c
 }
 
 export function makePosition(overrides: Partial<Position> = {}): Position {
-  const contract = makeContract(overrides.contract)
+  const contract = overrides.contract ?? makeContract()
   return {
     contract,
     side: 'long',
-    qty: 10,
-    avgEntryPrice: 150,
-    currentPrice: 160,
+    quantity: new Decimal(10),
+    avgCost: 150,
+    marketPrice: 160,
     marketValue: 1600,
     unrealizedPnL: 100,
-    unrealizedPnLPercent: 6.67,
-    costBasis: 1500,
+    realizedPnL: 0,
     leverage: 1,
     ...overrides,
-    // Ensure nested contract override works
-    ...(overrides.contract ? { contract: { ...contract, ...overrides.contract } } : {}),
   }
 }
 
-export function makeOrder(overrides: Partial<Order> = {}): Order {
-  return {
-    id: 'order-1',
-    contract: makeContract(),
-    side: 'buy',
-    type: 'market',
-    qty: 10,
-    status: 'filled',
-    filledPrice: 150,
-    filledQty: 10,
-    createdAt: new Date('2025-01-01'),
-    ...overrides,
+export function makeOpenOrder(overrides: Partial<OpenOrder> = {}): OpenOrder {
+  const contract = overrides.contract ?? makeContract()
+  const order = overrides.order ?? new Order()
+  if (!overrides.order) {
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal(10)
   }
+  const orderState = overrides.orderState ?? new OrderState()
+  if (!overrides.orderState) {
+    orderState.status = 'Filled'
+  }
+  return { contract, order, orderState }
 }
 
-export function makeOrderResult(overrides: Partial<OrderResult> = {}): OrderResult {
+export function makePlaceOrderResult(overrides: Partial<PlaceOrderResult> = {}): PlaceOrderResult {
   return {
     success: true,
     orderId: 'order-1',
-    filledPrice: 150,
-    filledQty: 10,
     ...overrides,
   }
 }
 
-// ==================== MockTradingAccount ====================
+// ==================== MockBroker ====================
 
-export interface MockTradingAccountOptions {
+export interface MockBrokerOptions {
   id?: string
   provider?: string
   label?: string
   capabilities?: Partial<AccountCapabilities>
   positions?: Position[]
-  orders?: Order[]
+  orders?: OpenOrder[]
   accountInfo?: Partial<AccountInfo>
 }
 
-export class MockTradingAccount implements ITradingAccount {
+export class MockBroker implements IBroker {
   readonly id: string
   readonly provider: string
   readonly label: string
 
   private _capabilities: AccountCapabilities
   private _positions: Position[]
-  private _orders: Order[]
+  private _orders: OpenOrder[]
   private _accountInfo: AccountInfo
 
   // Spied methods
@@ -116,22 +110,31 @@ export class MockTradingAccount implements ITradingAccount {
   close = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
 
   searchContracts = vi.fn<(pattern: string) => Promise<ContractDescription[]>>()
-    .mockResolvedValue([{ contract: makeContract() }])
+    .mockImplementation(async () => {
+      const desc = new ContractDescription()
+      desc.contract = makeContract()
+      return [desc]
+    })
 
-  getContractDetails = vi.fn<(query: Partial<Contract>) => Promise<ContractDetails | null>>()
-    .mockResolvedValue({ contract: makeContract(), longName: 'Apple Inc.' })
+  getContractDetails = vi.fn<(query: Contract) => Promise<ContractDetails | null>>()
+    .mockImplementation(async () => {
+      const details = new ContractDetails()
+      details.contract = makeContract()
+      details.longName = 'Apple Inc.'
+      return details
+    })
 
-  placeOrder = vi.fn<(order: OrderRequest) => Promise<OrderResult>>()
-    .mockResolvedValue(makeOrderResult())
+  placeOrder = vi.fn<(contract: Contract, order: Order) => Promise<PlaceOrderResult>>()
+    .mockResolvedValue(makePlaceOrderResult())
 
-  modifyOrder = vi.fn<(orderId: string, changes: Partial<OrderRequest>) => Promise<OrderResult>>()
-    .mockResolvedValue(makeOrderResult())
+  modifyOrder = vi.fn<(orderId: string, changes: Order) => Promise<PlaceOrderResult>>()
+    .mockResolvedValue(makePlaceOrderResult())
 
   cancelOrder = vi.fn<(orderId: string) => Promise<boolean>>()
     .mockResolvedValue(true)
 
-  closePosition = vi.fn<(contract: Contract, qty?: number) => Promise<OrderResult>>()
-    .mockResolvedValue(makeOrderResult())
+  closePosition = vi.fn<(contract: Contract, qty?: Decimal) => Promise<PlaceOrderResult>>()
+    .mockResolvedValue(makePlaceOrderResult())
 
   getQuote = vi.fn<(contract: Contract) => Promise<Quote>>()
     .mockResolvedValue({
@@ -149,7 +152,7 @@ export class MockTradingAccount implements ITradingAccount {
       nextClose: new Date('2025-01-01T21:00:00Z'),
     })
 
-  constructor(options: MockTradingAccountOptions = {}) {
+  constructor(options: MockBrokerOptions = {}) {
     this.id = options.id ?? 'mock-paper'
     this.provider = options.provider ?? 'mock'
     this.label = options.label ?? 'Mock Paper Account'
@@ -169,7 +172,7 @@ export class MockTradingAccount implements ITradingAccount {
   getPositions = vi.fn<() => Promise<Position[]>>()
     .mockImplementation(async () => this._positions)
 
-  getOrders = vi.fn<() => Promise<Order[]>>()
+  getOrders = vi.fn<() => Promise<OpenOrder[]>>()
     .mockImplementation(async () => this._orders)
 
   // ---- Test helpers ----
@@ -178,7 +181,7 @@ export class MockTradingAccount implements ITradingAccount {
     this._positions = positions
   }
 
-  setOrders(orders: Order[]): void {
+  setOrders(orders: OpenOrder[]): void {
     this._orders = orders
   }
 

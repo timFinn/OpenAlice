@@ -2,16 +2,17 @@
  * Contract resolution helpers for CCXT exchanges.
  *
  * Pure functions parameterized by (markets, exchangeName) —
- * no dependency on the CcxtAccount instance.
+ * no dependency on the CcxtBroker instance.
+ * Now returns IBKR Contract class instances with aliceId extension.
  */
 
-import type { Contract, SecType } from '../../contract.js'
-import type { Order } from '../../interfaces.js'
+import { Contract, OrderState } from '@traderalice/ibkr'
+import '../../contract-ext.js'
 import type { CcxtMarket } from './ccxt-types.js'
 
 // ---- Type mapping ----
 
-export function ccxtTypeToSecType(type: string): SecType {
+export function ccxtTypeToSecType(type: string): string {
   switch (type) {
     case 'spot': return 'CRYPTO'
     case 'swap': return 'CRYPTO'  // perpetual swap is still crypto
@@ -21,34 +22,41 @@ export function ccxtTypeToSecType(type: string): SecType {
   }
 }
 
-export function mapOrderStatus(status: string | undefined): Order['status'] {
+export function mapOrderStatus(status: string | undefined): string {
   switch (status) {
-    case 'closed': return 'filled'
-    case 'open': return 'pending'
+    case 'closed': return 'Filled'
+    case 'open': return 'Submitted'
     case 'canceled':
-    case 'cancelled': return 'cancelled'
+    case 'cancelled': return 'Cancelled'
     case 'expired':
-    case 'rejected': return 'rejected'
-    default: return 'pending'
+    case 'rejected': return 'Inactive'
+    default: return 'Submitted'
   }
+}
+
+/** Create an IBKR OrderState from a CCXT status string. */
+export function makeOrderState(ccxtStatus: string | undefined): OrderState {
+  const s = new OrderState()
+  s.status = mapOrderStatus(ccxtStatus)
+  return s
 }
 
 // ---- Contract ↔ CCXT symbol conversion ----
 
 /**
- * Convert a CcxtMarket to a Contract.
+ * Convert a CcxtMarket to an IBKR Contract.
  * aliceId = "{exchangeName}-{market.id}"
  */
 export function marketToContract(market: CcxtMarket, exchangeName: string): Contract {
-  return {
-    aliceId: `${exchangeName}-${market.id}`,
-    symbol: market.base,
-    secType: ccxtTypeToSecType(market.type),
-    exchange: exchangeName,
-    currency: market.quote,
-    localSymbol: market.symbol,       // CCXT unified symbol, e.g. "BTC/USDT:USDT"
-    description: `${market.base}/${market.quote} ${market.type}${market.settle ? ` (${market.settle} settled)` : ''}`,
-  }
+  const c = new Contract()
+  c.aliceId = `${exchangeName}-${market.id}`
+  c.symbol = market.base
+  c.secType = ccxtTypeToSecType(market.type)
+  c.exchange = exchangeName
+  c.currency = market.quote
+  c.localSymbol = market.symbol       // CCXT unified symbol, e.g. "BTC/USDT:USDT"
+  c.description = `${market.base}/${market.quote} ${market.type}${market.settle ? ` (${market.settle} settled)` : ''}`
+  return c
 }
 
 /** Parse aliceId → raw nativeId (market.id) part. */
@@ -104,7 +112,7 @@ export function contractToCcxt(
 
 /** Synchronous search returning CCXT symbols. Used by contractToCcxt. */
 export function resolveContractSync(
-  query: Partial<Contract>,
+  query: Contract,
   markets: Record<string, CcxtMarket>,
 ): string[] {
   if (!query.symbol) return []

@@ -1,37 +1,49 @@
 /**
- * CcxtAccount — ITradingAccount adapter for CCXT exchanges
+ * CcxtBroker — IBroker adapter for CCXT exchanges
  *
- * Direct implementation against ccxt unified API. No SymbolMapper —
- * contract resolution searches exchange.markets on demand.
+ * Direct implementation against ccxt unified API.
+ * Takes IBKR Order objects, reads relevant fields, ignores the rest.
  * aliceId format: "{exchange}-{market.id}" (e.g. "bybit-BTCUSDT").
  */
 
 import ccxt from 'ccxt'
+import Decimal from 'decimal.js'
 import type { Exchange, Order as CcxtOrder } from 'ccxt'
-import type { Contract, ContractDescription, ContractDetails, SecType } from '../../contract.js'
+import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type {
-  ITradingAccount,
+  IBroker,
   AccountCapabilities,
   AccountInfo,
   Position,
-  Order,
-  OrderRequest,
-  OrderResult,
+  PlaceOrderResult,
+  OpenOrder,
   Quote,
   MarketClock,
   FundingRate,
   OrderBook,
   OrderBookLevel,
-} from '../../interfaces.js'
-import type { CcxtAccountConfig, CcxtMarket } from './ccxt-types.js'
+} from '../types.js'
+import '../../contract-ext.js'
+import type { CcxtBrokerConfig, CcxtMarket } from './ccxt-types.js'
 import { MAX_INIT_RETRIES, INIT_RETRY_BASE_MS } from './ccxt-types.js'
 import {
+  ccxtTypeToSecType,
   mapOrderStatus,
+  makeOrderState,
   marketToContract,
   contractToCcxt,
 } from './ccxt-contracts.js'
 
-export class CcxtAccount implements ITradingAccount {
+/** Map IBKR orderType codes to CCXT order type strings. */
+function ibkrOrderTypeToCcxt(orderType: string): string {
+  switch (orderType) {
+    case 'MKT': return 'market'
+    case 'LMT': return 'limit'
+    default: return orderType.toLowerCase()
+  }
+}
+
+export class CcxtBroker implements IBroker {
   readonly id: string
   readonly provider: string  // "ccxt" or the specific exchange name
   readonly label: string
@@ -45,7 +57,7 @@ export class CcxtAccount implements ITradingAccount {
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
-  constructor(config: CcxtAccountConfig) {
+  constructor(config: CcxtBrokerConfig) {
     this.exchangeName = config.exchange
     this.provider = config.exchange  // use exchange name as provider (e.g. "bybit", "binance")
     this.id = config.id ?? `${config.exchange}-main`
@@ -60,7 +72,6 @@ export class CcxtAccount implements ITradingAccount {
     }
 
     // Default: skip option markets to reduce concurrent requests during loadMarkets
-    // (bybit fires 6 parallel requests by default, which is unreliable through proxies)
     const defaultOptions: Record<string, unknown> = {
       fetchMarkets: { types: ['spot', 'linear', 'inverse'] },
     }
@@ -90,14 +101,14 @@ export class CcxtAccount implements ITradingAccount {
 
   private ensureInit(): void {
     if (!this.initialized) {
-      throw new Error(`CcxtAccount[${this.id}] not initialized. Call init() first.`)
+      throw new Error(`CcxtBroker[${this.id}] not initialized. Call init() first.`)
     }
   }
 
   private ensureWritable(): void {
     if (this.readOnly) {
       throw new Error(
-        `CcxtAccount[${this.id}] is in read-only mode (no API keys). This operation requires authentication.`,
+        `CcxtBroker[${this.id}] is in read-only mode (no API keys). This operation requires authentication.`,
       )
     }
   }
@@ -107,14 +118,11 @@ export class CcxtAccount implements ITradingAccount {
   async init(): Promise<void> {
     if (this.readOnly) {
       console.log(
-        `CcxtAccount[${this.id}]: no API credentials — running in market-data-only mode. ` +
+        `CcxtBroker[${this.id}]: no API credentials — running in market-data-only mode. ` +
         `Set apiKey and apiSecret in accounts.json for trading.`,
       )
     }
 
-    // CCXT's fetchMarkets fires all market-type requests via Promise.all —
-    // a single failure kills the entire batch. Monkey-patch fetchMarkets to
-    // run each type sequentially with per-type retries.
     const origFetchMarkets = this.exchange.fetchMarkets.bind(this.exchange)
     const accountId = this.id
 
@@ -128,7 +136,6 @@ export class CcxtAccount implements ITradingAccount {
       for (const type of types) {
         for (let attempt = 1; attempt <= MAX_INIT_RETRIES; attempt++) {
           try {
-            // Temporarily override types to load a single type
             const prevTypes = fmOpts['types']
             fmOpts['types'] = [type]
             const markets = await origFetchMarkets(params)
@@ -139,10 +146,10 @@ export class CcxtAccount implements ITradingAccount {
             const msg = err instanceof Error ? err.message : String(err)
             if (attempt < MAX_INIT_RETRIES) {
               const delay = INIT_RETRY_BASE_MS * Math.pow(2, attempt - 1)
-              console.warn(`CcxtAccount[${accountId}]: fetchMarkets(${type}) attempt ${attempt}/${MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
+              console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) attempt ${attempt}/${MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
               await new Promise(r => setTimeout(r, delay))
             } else {
-              console.warn(`CcxtAccount[${accountId}]: fetchMarkets(${type}) failed after ${MAX_INIT_RETRIES} attempts: ${msg} — skipping`)
+              console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) failed after ${MAX_INIT_RETRIES} attempts: ${msg} — skipping`)
             }
           }
         }
@@ -150,7 +157,6 @@ export class CcxtAccount implements ITradingAccount {
       return allMarkets as Awaited<ReturnType<Exchange['fetchMarkets']>>
     }
 
-    // Now loadMarkets will use our sequential fetchMarkets
     try {
       await this.exchange.loadMarkets()
     } catch (err) {
@@ -162,11 +168,11 @@ export class CcxtAccount implements ITradingAccount {
 
     const marketCount = Object.keys(this.exchange.markets).length
     if (marketCount === 0) {
-      throw new Error(`CcxtAccount[${this.id}]: failed to load any markets`)
+      throw new Error(`CcxtBroker[${this.id}]: failed to load any markets`)
     }
     this.initialized = true
     const mode = this.readOnly ? ', read-only (no API keys)' : ''
-    console.log(`CcxtAccount[${this.id}]: connected (${this.exchangeName}, ${marketCount} markets loaded${mode})`)
+    console.log(`CcxtBroker[${this.id}]: connected (${this.exchangeName}, ${marketCount} markets loaded${mode})`)
   }
 
   async close(): Promise<void> {
@@ -186,7 +192,6 @@ export class CcxtAccount implements ITradingAccount {
       if (market.active === false) continue
       if (market.base.toUpperCase() !== searchBase) continue
 
-      // Default filter: only USDT/USD/USDC quoted markets (skip exotic pairs)
       const quote = market.quote.toUpperCase()
       if (quote !== 'USDT' && quote !== 'USD' && quote !== 'USDC') continue
 
@@ -209,74 +214,82 @@ export class CcxtAccount implements ITradingAccount {
     })
 
     // Collect derivative types available for this base asset
-    const derivativeTypes = new Set<SecType>()
+    const derivativeTypes = new Set<string>()
     for (const m of matchedMarkets) {
       if (m.type === 'future') derivativeTypes.add('FUT')
       if (m.type === 'option') derivativeTypes.add('OPT')
     }
-    const derivativeSecTypes: SecType[] | undefined = derivativeTypes.size > 0
+    const derivativeSecTypes: string[] | undefined = derivativeTypes.size > 0
       ? Array.from(derivativeTypes)
       : undefined
 
-    return matchedMarkets.map(market => ({
-      contract: marketToContract(market, this.exchangeName),
-      derivativeSecTypes,
-    }))
+    return matchedMarkets.map(market => {
+      const desc = new ContractDescription()
+      desc.contract = marketToContract(market, this.exchangeName)
+      desc.derivativeSecTypes = derivativeSecTypes ?? []
+      return desc
+    })
   }
 
-  async getContractDetails(query: Partial<Contract>): Promise<ContractDetails | null> {
+  async getContractDetails(query: Contract): Promise<ContractDetails | null> {
     this.ensureInit()
 
-    const ccxtSymbol = contractToCcxt(query as Contract, this.markets, this.exchangeName)
+    const ccxtSymbol = contractToCcxt(query, this.markets, this.exchangeName)
     if (!ccxtSymbol) return null
 
     const market = this.markets[ccxtSymbol]
     if (!market) return null
 
-    return {
-      contract: marketToContract(market, this.exchangeName),
-      longName: `${market.base}/${market.quote} ${market.type}${market.settle ? ` (${market.settle} settled)` : ''}`,
-      minTick: market.precision?.price,
-    }
+    const details = new ContractDetails()
+    details.contract = marketToContract(market, this.exchangeName)
+    details.longName = `${market.base}/${market.quote} ${market.type}${market.settle ? ` (${market.settle} settled)` : ''}`
+    details.minTick = market.precision?.price ?? 0
+    return details
   }
 
   // ---- Trading operations ----
 
-  async placeOrder(order: OrderRequest): Promise<OrderResult> {
+  async placeOrder(contract: Contract, order: Order): Promise<PlaceOrderResult> {
     this.ensureInit()
     this.ensureWritable()
 
-    const ccxtSymbol = contractToCcxt(order.contract, this.markets, this.exchangeName)
+    const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
     if (!ccxtSymbol) {
       return { success: false, error: 'Cannot resolve contract to CCXT symbol' }
     }
 
-    let size = order.qty
+    let size = !order.totalQuantity.equals(UNSET_DECIMAL)
+      ? order.totalQuantity.toNumber()
+      : undefined
 
-    // Notional → size conversion
-    if (!size && order.notional) {
+    // cashQty (notional) → size conversion
+    if (!size && order.cashQty !== UNSET_DOUBLE && order.cashQty > 0) {
       const ticker = await this.exchange.fetchTicker(ccxtSymbol)
-      const price = order.price ?? ticker.last
+      const price = order.lmtPrice !== UNSET_DOUBLE ? order.lmtPrice : ticker.last
       if (!price) {
         return { success: false, error: 'Cannot determine price for notional conversion' }
       }
-      size = order.notional / price
+      size = order.cashQty / price
     }
 
     if (!size) {
-      return { success: false, error: 'Either qty or notional must be provided' }
+      return { success: false, error: 'Either totalQuantity or cashQty must be provided' }
     }
 
     try {
       const params: Record<string, unknown> = {}
-      if (order.reduceOnly) params.reduceOnly = true
+      // Check for reduce-only — IBKR doesn't have this natively, but we support it
+      // Providers can set this via order misc options or we check a custom field
+
+      const ccxtOrderType = ibkrOrderTypeToCcxt(order.orderType)
+      const side = order.action.toLowerCase() as 'buy' | 'sell'
 
       const ccxtOrder = await this.exchange.createOrder(
         ccxtSymbol,
-        order.type,
-        order.side,
+        ccxtOrderType,
+        side,
         size,
-        order.type === 'limit' ? order.price : undefined,
+        ccxtOrderType === 'limit' && order.lmtPrice !== UNSET_DOUBLE ? order.lmtPrice : undefined,
         params,
       )
 
@@ -291,8 +304,7 @@ export class CcxtAccount implements ITradingAccount {
         success: true,
         orderId: ccxtOrder.id,
         message: `Order ${ccxtOrder.id} ${status}`,
-        filledPrice: status === 'filled' ? (ccxtOrder.average ?? ccxtOrder.price ?? undefined) : undefined,
-        filledQty: status === 'filled' ? (ccxtOrder.filled ?? undefined) : undefined,
+        orderState: makeOrderState(ccxtOrder.status),
       }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
@@ -312,7 +324,7 @@ export class CcxtAccount implements ITradingAccount {
     }
   }
 
-  async modifyOrder(orderId: string, changes: Partial<OrderRequest>): Promise<OrderResult> {
+  async modifyOrder(orderId: string, changes: Order): Promise<PlaceOrderResult> {
     this.ensureInit()
     this.ensureWritable()
 
@@ -324,27 +336,29 @@ export class CcxtAccount implements ITradingAccount {
 
       // editOrder requires type and side — fetch the original order to fill in defaults
       const original = await this.exchange.fetchOrder(orderId, ccxtSymbol)
+      const qty = !changes.totalQuantity.equals(UNSET_DECIMAL) ? changes.totalQuantity.toNumber() : original.amount
+      const price = changes.lmtPrice !== UNSET_DOUBLE ? changes.lmtPrice : original.price
+
       const result = await this.exchange.editOrder(
         orderId,
         ccxtSymbol,
-        (changes.type as string) ?? original.type,
+        changes.orderType ? ibkrOrderTypeToCcxt(changes.orderType) : (original.type ?? 'market'),
         original.side,
-        changes.qty ?? original.amount,
-        changes.price ?? original.price,
+        qty,
+        price,
       )
 
       return {
         success: true,
         orderId: result.id,
-        filledPrice: result.average ?? undefined,
-        filledQty: result.filled ?? undefined,
+        orderState: makeOrderState(result.status),
       }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
   }
 
-  async closePosition(contract: Contract, qty?: number): Promise<OrderResult> {
+  async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
     this.ensureInit()
     this.ensureWritable()
 
@@ -361,13 +375,12 @@ export class CcxtAccount implements ITradingAccount {
       return { success: false, error: `No open position for ${aliceId ?? symbol ?? 'unknown'}` }
     }
 
-    return this.placeOrder({
-      contract: pos.contract,
-      side: pos.side === 'long' ? 'sell' : 'buy',
-      type: 'market',
-      qty: qty ?? pos.qty,
-      reduceOnly: true,
-    })
+    const order = new Order()
+    order.action = pos.side === 'long' ? 'SELL' : 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = quantity ?? pos.quantity
+
+    return this.placeOrder(pos.contract, order)
   }
 
   // ---- Queries ----
@@ -394,11 +407,11 @@ export class CcxtAccount implements ITradingAccount {
     }
 
     return {
-      cash: free,
-      equity: total,
+      netLiquidation: total,
+      totalCashValue: free,
       unrealizedPnL,
       realizedPnL,
-      totalMargin: used,
+      initMarginReq: used,
     }
   }
 
@@ -419,19 +432,17 @@ export class CcxtAccount implements ITradingAccount {
       const markPrice = parseFloat(String(p.markPrice ?? 0))
       const entryPrice = parseFloat(String(p.entryPrice ?? 0))
       const marketValue = size * markPrice
-      const costBasis = size * entryPrice
       const unrealizedPnL = parseFloat(String(p.unrealizedPnl ?? 0))
 
       result.push({
         contract: marketToContract(market, this.exchangeName),
         side: p.side === 'long' ? 'long' : 'short',
-        qty: size,
-        avgEntryPrice: entryPrice,
-        currentPrice: markPrice,
+        quantity: new Decimal(size),
+        avgCost: entryPrice,
+        marketPrice: markPrice,
         marketValue,
         unrealizedPnL,
-        unrealizedPnLPercent: costBasis > 0 ? (unrealizedPnL / costBasis) * 100 : 0,
-        costBasis,
+        realizedPnL: parseFloat(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)),
         leverage: parseFloat(String(p.leverage ?? 1)),
         margin: parseFloat(String(p.initialMargin ?? p.collateral ?? 0)),
         liquidationPrice: parseFloat(String(p.liquidationPrice ?? 0)) || undefined,
@@ -441,7 +452,7 @@ export class CcxtAccount implements ITradingAccount {
     return result
   }
 
-  async getOrders(): Promise<Order[]> {
+  async getOrders(): Promise<OpenOrder[]> {
     this.ensureInit()
     this.ensureWritable()
 
@@ -461,7 +472,7 @@ export class CcxtAccount implements ITradingAccount {
       // Some exchanges don't support fetchClosedOrders
     }
 
-    const result: Order[] = []
+    const result: OpenOrder[] = []
 
     for (const o of allOrders) {
       const market = this.markets[o.symbol]
@@ -471,19 +482,19 @@ export class CcxtAccount implements ITradingAccount {
         this.orderSymbolCache.set(o.id, o.symbol)
       }
 
+      const contract = marketToContract(market, this.exchangeName)
+
+      const order = new Order()
+      order.action = (o.side ?? 'buy').toUpperCase()
+      order.totalQuantity = new Decimal(o.amount ?? 0)
+      order.orderType = (o.type ?? 'market').toUpperCase()
+      if (o.price != null) order.lmtPrice = o.price
+      order.orderId = parseInt(o.id, 10) || 0
+
       result.push({
-        id: o.id,
-        contract: marketToContract(market, this.exchangeName),
-        side: o.side as 'buy' | 'sell',
-        type: (o.type ?? 'market') as Order['type'],
-        qty: o.amount ?? 0,
-        price: o.price ?? undefined,
-        reduceOnly: o.reduceOnly ?? false,
-        status: mapOrderStatus(o.status),
-        filledPrice: o.average ?? undefined,
-        filledQty: o.filled ?? undefined,
-        filledAt: o.lastTradeTimestamp ? new Date(o.lastTradeTimestamp) : undefined,
-        createdAt: new Date(o.timestamp ?? Date.now()),
+        contract,
+        order,
+        orderState: makeOrderState(o.status),
       })
     }
 
@@ -518,7 +529,7 @@ export class CcxtAccount implements ITradingAccount {
   getCapabilities(): AccountCapabilities {
     return {
       supportedSecTypes: ['CRYPTO'],
-      supportedOrderTypes: ['market', 'limit'],
+      supportedOrderTypes: ['MKT', 'LMT'],
     }
   }
 

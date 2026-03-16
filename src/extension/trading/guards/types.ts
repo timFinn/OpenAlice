@@ -1,5 +1,5 @@
 import type { Operation } from '../git/types.js'
-import type { Position, AccountInfo } from '../interfaces.js'
+import type { Position, AccountInfo } from '../brokers/types.js'
 
 /** Read-only context assembled by the pipeline, consumed by guards. */
 export interface GuardContext {

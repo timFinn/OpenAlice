@@ -1,14 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import Decimal from 'decimal.js'
+import { Contract, Order } from '@traderalice/ibkr'
 import { TradingGit } from './TradingGit.js'
 import type { TradingGitConfig } from './interfaces.js'
 import type { Operation, GitState } from './types.js'
+import '../contract-ext.js'
 
 // ==================== Helpers ====================
 
+function makeContract(overrides: { aliceId?: string; symbol?: string } = {}): Contract {
+  const c = new Contract()
+  c.aliceId = overrides.aliceId ?? 'mock-AAPL'
+  c.symbol = overrides.symbol ?? 'AAPL'
+  c.secType = 'STK'
+  c.exchange = 'NASDAQ'
+  c.currency = 'USD'
+  return c
+}
+
 function makeGitState(overrides: Partial<GitState> = {}): GitState {
   return {
-    cash: 100_000,
-    equity: 105_000,
+    totalCashValue: 100_000,
+    netLiquidation: 105_000,
     unrealizedPnL: 5_000,
     realizedPnL: 1_000,
     positions: [],
@@ -21,7 +34,8 @@ function makeConfig(overrides: Partial<TradingGitConfig> = {}): TradingGitConfig
   return {
     executeOperation: overrides.executeOperation ?? vi.fn().mockResolvedValue({
       success: true,
-      order: { id: 'order-1', status: 'filled', filledPrice: 150, filledQty: 10 },
+      orderId: 'order-1',
+      execution: { price: 150, shares: 10 },
     }),
     getGitState: overrides.getGitState ?? vi.fn().mockResolvedValue(makeGitState()),
     onCommit: overrides.onCommit,
@@ -29,17 +43,17 @@ function makeConfig(overrides: Partial<TradingGitConfig> = {}): TradingGitConfig
 }
 
 function buyOp(symbol = 'AAPL'): Operation {
-  return {
-    action: 'placeOrder',
-    params: { symbol, side: 'buy', type: 'market', qty: 10 },
-  }
+  const contract = makeContract({ symbol })
+  const order = new Order()
+  order.action = 'BUY'
+  order.orderType = 'MKT'
+  order.totalQuantity = new Decimal(10)
+  return { action: 'placeOrder', contract, order }
 }
 
 function sellOp(symbol = 'AAPL'): Operation {
-  return {
-    action: 'closePosition',
-    params: { symbol },
-  }
+  const contract = makeContract({ symbol })
+  return { action: 'closePosition', contract }
 }
 
 // ==================== Tests ====================
@@ -199,7 +213,7 @@ describe('TradingGit', () => {
       const pendingConfig = makeConfig({
         executeOperation: vi.fn().mockResolvedValue({
           success: true,
-          order: { id: 'order-2', status: 'pending' },
+          orderId: 'order-2',
         }),
       })
       const gitPending = new TradingGit(pendingConfig)
@@ -392,7 +406,7 @@ describe('TradingGit', () => {
       const pendingConfig = makeConfig({
         executeOperation: vi.fn().mockResolvedValue({
           success: true,
-          order: { id: 'lmt-1', status: 'pending' },
+          orderId: 'lmt-1',
         }),
       })
       const gitP = new TradingGit(pendingConfig)
@@ -410,7 +424,7 @@ describe('TradingGit', () => {
       const pendingConfig = makeConfig({
         executeOperation: vi.fn().mockResolvedValue({
           success: true,
-          order: { id: 'lmt-1', status: 'pending' },
+          orderId: 'lmt-1',
         }),
       })
       const gitP = new TradingGit(pendingConfig)
@@ -449,15 +463,14 @@ describe('TradingGit', () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: { aliceId: 'mock-AAPL', symbol: 'AAPL' },
+            contract: makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' }),
             side: 'long',
-            qty: 10,
-            avgEntryPrice: 150,
-            currentPrice: 160,
+            quantity: new Decimal(10),
+            avgCost: 150,
+            marketPrice: 160,
             marketValue: 1600,
             unrealizedPnL: 100,
-            unrealizedPnLPercent: 6.67,
-            costBasis: 1500,
+            realizedPnL: 0,
             leverage: 1,
           },
         ],
@@ -469,7 +482,7 @@ describe('TradingGit', () => {
 
       const result = await simGit.simulatePriceChange([{ symbol: 'AAPL', change: '-10%' }])
       expect(result.success).toBe(true)
-      // Price drops 10%: 160 → 144
+      // Price drops 10%: 160 -> 144
       const simPos = result.simulatedState.positions[0]
       expect(simPos.simulatedPrice).toBe(144)
       // PnL: (144 - 150) * 10 = -60
@@ -480,15 +493,14 @@ describe('TradingGit', () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: { aliceId: 'mock-AAPL', symbol: 'AAPL' },
+            contract: makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' }),
             side: 'long',
-            qty: 10,
-            avgEntryPrice: 150,
-            currentPrice: 160,
+            quantity: new Decimal(10),
+            avgCost: 150,
+            marketPrice: 160,
             marketValue: 1600,
             unrealizedPnL: 100,
-            unrealizedPnLPercent: 6.67,
-            costBasis: 1500,
+            realizedPnL: 0,
             leverage: 1,
           },
         ],
@@ -509,14 +521,14 @@ describe('TradingGit', () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: { symbol: 'AAPL' },
-            side: 'long', qty: 10, avgEntryPrice: 100, currentPrice: 100,
-            marketValue: 1000, unrealizedPnL: 0, unrealizedPnLPercent: 0, costBasis: 1000, leverage: 1,
+            contract: makeContract({ symbol: 'AAPL' }),
+            side: 'long', quantity: new Decimal(10), avgCost: 100, marketPrice: 100,
+            marketValue: 1000, unrealizedPnL: 0, realizedPnL: 0, leverage: 1,
           },
           {
-            contract: { symbol: 'GOOG' },
-            side: 'long', qty: 5, avgEntryPrice: 200, currentPrice: 200,
-            marketValue: 1000, unrealizedPnL: 0, unrealizedPnLPercent: 0, costBasis: 1000, leverage: 1,
+            contract: makeContract({ symbol: 'GOOG' }),
+            side: 'long', quantity: new Decimal(5), avgCost: 200, marketPrice: 200,
+            marketValue: 1000, unrealizedPnL: 0, realizedPnL: 0, leverage: 1,
           },
         ],
       })
@@ -534,9 +546,9 @@ describe('TradingGit', () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: { symbol: 'AAPL' },
-            side: 'long', qty: 10, avgEntryPrice: 100, currentPrice: 100,
-            marketValue: 1000, unrealizedPnL: 0, unrealizedPnLPercent: 0, costBasis: 1000, leverage: 1,
+            contract: makeContract({ symbol: 'AAPL' }),
+            side: 'long', quantity: new Decimal(10), avgCost: 100, marketPrice: 100,
+            marketValue: 1000, unrealizedPnL: 0, realizedPnL: 0, leverage: 1,
           },
         ],
       })

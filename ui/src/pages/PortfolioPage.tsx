@@ -218,7 +218,7 @@ interface PositionWithAccount extends Position {
 function isDerivative(p: Position): boolean {
   const t = p.contract.secType
   if (t === 'FUT' || t === 'OPT' || t === 'FOP') return true
-  if (t === 'CRYPTO' && p.leverage > 1) return true
+  if (t === 'CRYPTO' && (p.leverage ?? 1) > 1) return true
   return p.side === 'short'
 }
 
@@ -239,7 +239,7 @@ function contractDisplay(p: Position): { name: string; tag?: string } {
     return { name: expiry ? `${sym} ${expiry}` : sym, tag: 'fut' }
   }
   if (t === 'CRYPTO') {
-    return { name: sym, tag: p.leverage > 1 ? 'swap' : 'spot' }
+    return { name: sym, tag: (p.leverage ?? 1) > 1 ? 'swap' : 'spot' }
   }
   // STK, CASH, BOND, CMDTY, etc. — just the symbol, no tag
   return { name: sym }
@@ -284,7 +284,7 @@ function PositionsTable({ positions }: { positions: PositionWithAccount[] }) {
                           {p.side}
                         </span>
                       )}
-                      {p.leverage > 1 && (
+                      {(p.leverage ?? 1) > 1 && (
                         <span className="text-[10px] px-1 py-0.5 rounded bg-accent/15 text-accent font-medium">{p.leverage}x</span>
                       )}
                       <span className="text-[10px] text-text-muted/50">{p.accountLabel}</span>
@@ -298,15 +298,19 @@ function PositionsTable({ positions }: { positions: PositionWithAccount[] }) {
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-right text-text">{fmtNum(p.qty)}</td>
-                  <td className="px-3 py-2 text-right text-text-muted">{fmt(p.avgEntryPrice)}</td>
-                  <td className="px-3 py-2 text-right text-text">{fmt(p.currentPrice)}</td>
+                  <td className="px-3 py-2 text-right text-text">{fmtNum(Number(p.quantity))}</td>
+                  <td className="px-3 py-2 text-right text-text-muted">{fmt(p.avgCost)}</td>
+                  <td className="px-3 py-2 text-right text-text">{fmt(p.marketPrice)}</td>
                   <td className="px-3 py-2 text-right text-text">{fmt(p.marketValue)}</td>
                   <td className={`px-3 py-2 text-right font-medium ${p.unrealizedPnL >= 0 ? 'text-green' : 'text-red'}`}>
                     {fmtPnl(p.unrealizedPnL)}
                   </td>
-                  <td className={`px-3 py-2 text-right ${p.unrealizedPnLPercent >= 0 ? 'text-green' : 'text-red'}`}>
-                    {p.unrealizedPnLPercent >= 0 ? '+' : ''}{p.unrealizedPnLPercent.toFixed(2)}%
+                  <td className={`px-3 py-2 text-right ${p.unrealizedPnL >= 0 ? 'text-green' : 'text-red'}`}>
+                    {(() => {
+                      const cost = p.avgCost * Number(p.quantity)
+                      const pct = cost > 0 ? (p.unrealizedPnL / cost) * 100 : 0
+                      return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`
+                    })()}
                   </td>
                 </tr>
               )

@@ -6,22 +6,21 @@
 
 import { tool } from 'ai'
 import { z } from 'zod'
-import { resolveAccounts } from '../../adapter.js'
-import type { AccountResolver } from '../../adapter.js'
-import { CcxtAccount } from './CcxtAccount.js'
+import { Contract } from '@traderalice/ibkr'
+import type { AccountManager } from '../../account-manager.js'
+import { CcxtBroker } from './CcxtBroker.js'
+import '../../contract-ext.js'
 
-export function createCcxtProviderTools(resolver: AccountResolver) {
-  const { accountManager } = resolver
-
-  /** Resolve to exactly one CcxtAccount. Returns error object if unable. */
-  const resolveCcxtOne = (source?: string): { account: CcxtAccount; id: string } | { error: string } => {
-    const targets = resolveAccounts(accountManager, source)
-      .filter((t): t is { account: CcxtAccount; id: string } => t.account instanceof CcxtAccount)
+export function createCcxtProviderTools(manager: AccountManager) {
+  /** Resolve to exactly one CcxtBroker. Returns error object if unable. */
+  const resolveCcxtOne = (source?: string): { broker: CcxtBroker; id: string } | { error: string } => {
+    const targets = manager.resolve(source)
+      .filter((uta): uta is typeof uta & { broker: CcxtBroker } => uta.broker instanceof CcxtBroker)
     if (targets.length === 0) return { error: 'No CCXT account available.' }
     if (targets.length > 1) {
       return { error: `Multiple CCXT accounts: ${targets.map(t => t.id).join(', ')}. Specify source.` }
     }
-    return targets[0]
+    return { broker: targets[0].broker, id: targets[0].id }
   }
 
   const sourceDesc =
@@ -45,8 +44,10 @@ Use searchContracts first to get the aliceId.`,
       execute: async ({ aliceId, source }) => {
         const resolved = resolveCcxtOne(source)
         if ('error' in resolved) return resolved
-        const { account, id } = resolved
-        const result = await account.getFundingRate({ aliceId })
+        const { broker, id } = resolved
+        const contract = new Contract()
+        contract.aliceId = aliceId
+        const result = await broker.getFundingRate(contract)
         return { source: id, ...result }
       },
     }),
@@ -71,8 +72,10 @@ Use searchContracts first to get the aliceId.`,
       execute: async ({ aliceId, limit, source }) => {
         const resolved = resolveCcxtOne(source)
         if ('error' in resolved) return resolved
-        const { account, id } = resolved
-        const result = await account.getOrderBook({ aliceId }, limit ?? 20)
+        const { broker, id } = resolved
+        const contract = new Contract()
+        contract.aliceId = aliceId
+        const result = await broker.getOrderBook(contract, limit ?? 20)
         return { source: id, ...result }
       },
     }),

@@ -1,4 +1,5 @@
 import type { OperationGuard, GuardContext } from './types.js'
+import { getOperationSymbol } from '../git/types.js'
 
 export class SymbolWhitelistGuard implements OperationGuard {
   readonly name = 'symbol-whitelist'
@@ -13,8 +14,8 @@ export class SymbolWhitelistGuard implements OperationGuard {
   }
 
   check(ctx: GuardContext): string | null {
-    const symbol = ctx.operation.params.symbol as string | undefined
-    if (!symbol) return null
+    const symbol = getOperationSymbol(ctx.operation)
+    if (symbol === 'unknown') return null
 
     if (!this.allowed.has(symbol)) {
       return `Symbol ${symbol} is not in the allowed list`

@@ -33,7 +33,7 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Account info
   app.get('/accounts/:id/account', async (c) => {
-    const account = ctx.accountManager.getAccount(c.req.param('id'))
+    const account = ctx.accountManager.get(c.req.param('id'))
     if (!account) return c.json({ error: 'Account not found' }, 404)
     try {
       return c.json(await account.getAccount())
@@ -44,7 +44,7 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Positions
   app.get('/accounts/:id/positions', async (c) => {
-    const account = ctx.accountManager.getAccount(c.req.param('id'))
+    const account = ctx.accountManager.get(c.req.param('id'))
     if (!account) return c.json({ error: 'Account not found' }, 404)
     try {
       const positions = await account.getPositions()
@@ -56,7 +56,7 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Orders
   app.get('/accounts/:id/orders', async (c) => {
-    const account = ctx.accountManager.getAccount(c.req.param('id'))
+    const account = ctx.accountManager.get(c.req.param('id'))
     if (!account) return c.json({ error: 'Account not found' }, 404)
     try {
       const orders = await account.getOrders()
@@ -68,7 +68,7 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Market clock (optional capability)
   app.get('/accounts/:id/market-clock', async (c) => {
-    const account = ctx.accountManager.getAccount(c.req.param('id'))
+    const account = ctx.accountManager.get(c.req.param('id'))
     if (!account) return c.json({ error: 'Account not found' }, 404)
     if (!account.getMarketClock) return c.json({ error: 'Market clock not supported' }, 501)
     try {
@@ -80,11 +80,13 @@ export function createTradingRoutes(ctx: EngineContext) {
 
   // Quote
   app.get('/accounts/:id/quote/:symbol', async (c) => {
-    const account = ctx.accountManager.getAccount(c.req.param('id'))
+    const account = ctx.accountManager.get(c.req.param('id'))
     if (!account) return c.json({ error: 'Account not found' }, 404)
     try {
-      const symbol = c.req.param('symbol')
-      const quote = await account.getQuote({ symbol })
+      const { Contract } = await import('@traderalice/ibkr')
+      const contract = new Contract()
+      contract.symbol = c.req.param('symbol')
+      const quote = await account.getQuote(contract)
       return c.json(quote)
     } catch (err) {
       return c.json({ error: String(err) }, 500)
@@ -94,25 +96,25 @@ export function createTradingRoutes(ctx: EngineContext) {
   // ==================== Per-account wallet/git routes ====================
 
   app.get('/accounts/:id/wallet/log', (c) => {
-    const git = ctx.getAccountGit(c.req.param('id'))
-    if (!git) return c.json({ error: 'Account or wallet not found' }, 404)
+    const uta = ctx.accountManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
     const limit = Number(c.req.query('limit')) || 20
     const symbol = c.req.query('symbol') || undefined
-    return c.json({ commits: git.log({ limit, symbol }) })
+    return c.json({ commits: uta.log({ limit, symbol }) })
   })
 
   app.get('/accounts/:id/wallet/show/:hash', (c) => {
-    const git = ctx.getAccountGit(c.req.param('id'))
-    if (!git) return c.json({ error: 'Account or wallet not found' }, 404)
-    const commit = git.show(c.req.param('hash'))
+    const uta = ctx.accountManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    const commit = uta.show(c.req.param('hash'))
     if (!commit) return c.json({ error: 'Commit not found' }, 404)
     return c.json(commit)
   })
 
   app.get('/accounts/:id/wallet/status', (c) => {
-    const git = ctx.getAccountGit(c.req.param('id'))
-    if (!git) return c.json({ error: 'Account or wallet not found' }, 404)
-    return c.json(git.status())
+    const uta = ctx.accountManager.get(c.req.param('id'))
+    if (!uta) return c.json({ error: 'Account not found' }, 404)
+    return c.json(uta.status())
   })
 
   return app

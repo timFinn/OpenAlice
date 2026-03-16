@@ -1,49 +1,76 @@
 /**
- * AlpacaAccount — ITradingAccount adapter for Alpaca
+ * AlpacaBroker — IBroker adapter for Alpaca
  *
  * Direct implementation against @alpacahq/alpaca-trade-api SDK.
  * Supports US equities (STK). Contract resolution uses Alpaca's ticker
  * as nativeId — unambiguous for stocks, extensible when options arrive.
+ *
+ * Takes IBKR Order objects, reads relevant fields, ignores the rest.
  */
 
 import Alpaca from '@alpacahq/alpaca-trade-api'
-import type { Contract, ContractDescription, ContractDetails } from '../../contract.js'
+import Decimal from 'decimal.js'
+import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type {
-  ITradingAccount,
+  IBroker,
   AccountCapabilities,
   AccountInfo,
   Position,
-  Order,
-  OrderRequest,
-  OrderResult,
+  PlaceOrderResult,
+  OpenOrder,
   Quote,
   MarketClock,
-} from '../../interfaces.js'
+} from '../types.js'
+import '../../contract-ext.js'
 import type {
-  AlpacaAccountConfig,
-  AlpacaAccountRaw,
+  AlpacaBrokerConfig,
+  AlpacaBrokerRaw,
   AlpacaPositionRaw,
   AlpacaOrderRaw,
   AlpacaSnapshotRaw,
   AlpacaFillActivityRaw,
   AlpacaClockRaw,
 } from './alpaca-types.js'
-import { makeContract, resolveSymbol, mapAlpacaOrderStatus } from './alpaca-contracts.js'
+import { makeContract, resolveSymbol, mapAlpacaOrderStatus, makeOrderState } from './alpaca-contracts.js'
 import { computeRealizedPnL } from './alpaca-pnl.js'
 
-export class AlpacaAccount implements ITradingAccount {
+/** Map IBKR orderType codes to Alpaca API order type strings. */
+function ibkrOrderTypeToAlpaca(orderType: string): string {
+  switch (orderType) {
+    case 'MKT': return 'market'
+    case 'LMT': return 'limit'
+    case 'STP': return 'stop'
+    case 'STP LMT': return 'stop_limit'
+    case 'TRAIL': return 'trailing_stop'
+    default: return orderType.toLowerCase()
+  }
+}
+
+/** Map IBKR TIF codes to Alpaca API time_in_force strings. */
+function ibkrTifToAlpaca(tif: string): string {
+  switch (tif) {
+    case 'DAY': return 'day'
+    case 'GTC': return 'gtc'
+    case 'IOC': return 'ioc'
+    case 'FOK': return 'fok'
+    case 'OPG': return 'opg'
+    default: return tif.toLowerCase() || 'day'
+  }
+}
+
+export class AlpacaBroker implements IBroker {
   readonly id: string
   readonly provider = 'alpaca'
   readonly label: string
 
   private client!: InstanceType<typeof Alpaca>
-  private readonly config: AlpacaAccountConfig
+  private readonly config: AlpacaBrokerConfig
 
   /** Cached realized PnL from FILL activities (FIFO lot matching) */
   private realizedPnLCache: { value: number; updatedAt: number } | null = null
   private static readonly REALIZED_PNL_TTL_MS = 60_000
 
-  constructor(config: AlpacaAccountConfig) {
+  constructor(config: AlpacaBrokerConfig) {
     this.config = config
     this.id = config.id ?? (config.paper ? 'alpaca-paper' : 'alpaca-live')
     this.label = config.label ?? (config.paper ? 'Alpaca Paper' : 'Alpaca Live')
@@ -69,25 +96,25 @@ export class AlpacaAccount implements ITradingAccount {
     })
 
     let lastErr: unknown
-    for (let attempt = 1; attempt <= AlpacaAccount.MAX_INIT_RETRIES; attempt++) {
+    for (let attempt = 1; attempt <= AlpacaBroker.MAX_INIT_RETRIES; attempt++) {
       try {
-        const account = await this.client.getAccount() as AlpacaAccountRaw
+        const account = await this.client.getAccount() as AlpacaBrokerRaw
         console.log(
-          `AlpacaAccount[${this.id}]: connected (paper=${this.config.paper}, equity=$${parseFloat(account.equity).toFixed(2)})`,
+          `AlpacaBroker[${this.id}]: connected (paper=${this.config.paper}, equity=$${parseFloat(account.equity).toFixed(2)})`,
         )
         return
       } catch (err) {
         lastErr = err
         const isAuthError = err instanceof Error &&
           /40[13]|forbidden|unauthorized/i.test(err.message)
-        if (isAuthError && attempt >= AlpacaAccount.MAX_AUTH_RETRIES) {
+        if (isAuthError && attempt >= AlpacaBroker.MAX_AUTH_RETRIES) {
           throw new Error(
             `Authentication failed — verify your Alpaca API key and secret are correct.`,
           )
         }
-        if (attempt < AlpacaAccount.MAX_INIT_RETRIES) {
-          const delay = AlpacaAccount.INIT_RETRY_BASE_MS * 2 ** (attempt - 1)
-          console.warn(`AlpacaAccount[${this.id}]: init attempt ${attempt}/${AlpacaAccount.MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
+        if (attempt < AlpacaBroker.MAX_INIT_RETRIES) {
+          const delay = AlpacaBroker.INIT_RETRY_BASE_MS * 2 ** (attempt - 1)
+          console.warn(`AlpacaBroker[${this.id}]: init attempt ${attempt}/${AlpacaBroker.MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
           await new Promise(r => setTimeout(r, delay))
         }
       }
@@ -106,25 +133,27 @@ export class AlpacaAccount implements ITradingAccount {
 
     // Alpaca tickers are unique for stocks — pattern is treated as exact ticker match
     const ticker = pattern.toUpperCase()
-    return [{ contract: makeContract(ticker, this.provider) }]
+    const desc = new ContractDescription()
+    desc.contract = makeContract(ticker, this.provider)
+    return [desc]
   }
 
-  async getContractDetails(query: Partial<Contract>): Promise<ContractDetails | null> {
-    const symbol = resolveSymbol(query as Contract, this.provider)
+  async getContractDetails(query: Contract): Promise<ContractDetails | null> {
+    const symbol = resolveSymbol(query, this.provider)
     if (!symbol) return null
 
-    return {
-      contract: makeContract(symbol, this.provider),
-      validExchanges: ['SMART', 'NYSE', 'NASDAQ', 'ARCA'],
-      orderTypes: ['market', 'limit', 'stop', 'stop_limit', 'trailing_stop'],
-      stockType: 'COMMON',
-    }
+    const details = new ContractDetails()
+    details.contract = makeContract(symbol, this.provider)
+    details.validExchanges = 'SMART,NYSE,NASDAQ,ARCA'
+    details.orderTypes = 'MKT,LMT,STP,STP LMT,TRAIL'
+    details.stockType = 'COMMON'
+    return details
   }
 
   // ---- Trading operations ----
 
-  async placeOrder(order: OrderRequest): Promise<OrderResult> {
-    const symbol = resolveSymbol(order.contract, this.provider)
+  async placeOrder(contract: Contract, order: Order): Promise<PlaceOrderResult> {
+    const symbol = resolveSymbol(contract, this.provider)
     if (!symbol) {
       return { success: false, error: 'Cannot resolve contract to Alpaca symbol' }
     }
@@ -132,22 +161,30 @@ export class AlpacaAccount implements ITradingAccount {
     try {
       const alpacaOrder: Record<string, unknown> = {
         symbol,
-        side: order.side,
-        type: order.type === 'trailing_stop' ? 'trailing_stop' : order.type,
-        time_in_force: order.timeInForce ?? 'day',
+        side: order.action.toLowerCase(), // BUY → buy, SELL → sell
+        type: ibkrOrderTypeToAlpaca(order.orderType),
+        time_in_force: ibkrTifToAlpaca(order.tif),
       }
 
-      if (order.qty != null) {
-        alpacaOrder.qty = order.qty
-      } else if (order.notional != null) {
-        alpacaOrder.notional = order.notional
+      // Quantity: totalQuantity or cashQty (notional)
+      if (!order.totalQuantity.equals(UNSET_DECIMAL)) {
+        alpacaOrder.qty = order.totalQuantity.toNumber()
+      } else if (order.cashQty !== UNSET_DOUBLE) {
+        alpacaOrder.notional = order.cashQty
       }
 
-      if (order.price != null) alpacaOrder.limit_price = order.price
-      if (order.stopPrice != null) alpacaOrder.stop_price = order.stopPrice
-      if (order.trailingAmount != null) alpacaOrder.trail_price = order.trailingAmount
-      if (order.trailingPercent != null) alpacaOrder.trail_percent = order.trailingPercent
-      if (order.extendedHours != null) alpacaOrder.extended_hours = order.extendedHours
+      // Prices
+      if (order.lmtPrice !== UNSET_DOUBLE) alpacaOrder.limit_price = order.lmtPrice
+      if (order.auxPrice !== UNSET_DOUBLE) {
+        // auxPrice is stop price for STP, trailing offset for TRAIL
+        if (order.orderType === 'TRAIL') {
+          alpacaOrder.trail_price = order.auxPrice
+        } else {
+          alpacaOrder.stop_price = order.auxPrice
+        }
+      }
+      if (order.trailingPercent !== UNSET_DOUBLE) alpacaOrder.trail_percent = order.trailingPercent
+      if (order.outsideRth) alpacaOrder.extended_hours = true
 
       const result = await this.client.createOrder(alpacaOrder) as AlpacaOrderRaw
       const isFilled = result.status === 'filled'
@@ -155,23 +192,43 @@ export class AlpacaAccount implements ITradingAccount {
       return {
         success: true,
         orderId: result.id,
-        filledPrice: isFilled && result.filled_avg_price ? parseFloat(result.filled_avg_price) : undefined,
-        filledQty: isFilled && result.filled_qty ? parseFloat(result.filled_qty) : undefined,
+        execution: isFilled ? {
+          execId: '',
+          time: result.filled_at ?? '',
+          acctNumber: this.id,
+          exchange: 'SMART',
+          side: order.action,
+          shares: new Decimal(result.filled_qty ?? 0),
+          price: parseFloat(result.filled_avg_price ?? '0'),
+          permId: 0,
+          clientId: 0,
+          orderId: 0,
+          liquidation: 0,
+          cumQty: new Decimal(result.filled_qty ?? 0),
+          avgPrice: parseFloat(result.filled_avg_price ?? '0'),
+          orderRef: '',
+          evRule: '',
+          evMultiplier: 0,
+          modelCode: '',
+          lastLiquidity: 0,
+          pendingPriceRevision: false,
+          submitter: '',
+        } as any : undefined,
+        orderState: makeOrderState(result.status),
       }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
   }
 
-  async modifyOrder(orderId: string, changes: Partial<OrderRequest>): Promise<OrderResult> {
+  async modifyOrder(orderId: string, changes: Order): Promise<PlaceOrderResult> {
     try {
       const patch: Record<string, unknown> = {}
-      if (changes.qty != null) patch.qty = changes.qty
-      if (changes.price != null) patch.limit_price = changes.price
-      if (changes.stopPrice != null) patch.stop_price = changes.stopPrice
-      if (changes.trailingAmount != null) patch.trail = changes.trailingAmount
-      if (changes.trailingPercent != null) patch.trail = changes.trailingPercent
-      if (changes.timeInForce) patch.time_in_force = changes.timeInForce
+      if (!changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = changes.totalQuantity.toNumber()
+      if (changes.lmtPrice !== UNSET_DOUBLE) patch.limit_price = changes.lmtPrice
+      if (changes.auxPrice !== UNSET_DOUBLE) patch.stop_price = changes.auxPrice
+      if (changes.trailingPercent !== UNSET_DOUBLE) patch.trail = changes.trailingPercent
+      if (changes.tif) patch.time_in_force = ibkrTifToAlpaca(changes.tif)
 
       const result = await this.client.replaceOrder(orderId, patch) as AlpacaOrderRaw
       const isFilled = result.status === 'filled'
@@ -179,8 +236,7 @@ export class AlpacaAccount implements ITradingAccount {
       return {
         success: true,
         orderId: result.id,
-        filledPrice: isFilled && result.filled_avg_price ? parseFloat(result.filled_avg_price) : undefined,
-        filledQty: isFilled && result.filled_qty ? parseFloat(result.filled_qty) : undefined,
+        orderState: makeOrderState(result.status),
       }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
@@ -196,36 +252,34 @@ export class AlpacaAccount implements ITradingAccount {
     }
   }
 
-  async closePosition(contract: Contract, qty?: number): Promise<OrderResult> {
+  async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
     const symbol = resolveSymbol(contract, this.provider)
     if (!symbol) {
       return { success: false, error: 'Cannot resolve contract to Alpaca symbol' }
     }
 
     // Partial close → reverse market order
-    if (qty != null) {
+    if (quantity != null) {
       const positions = await this.getPositions()
       const pos = positions.find(p => p.contract.symbol === symbol)
       if (!pos) return { success: false, error: `No position for ${symbol}` }
 
-      return this.placeOrder({
-        contract,
-        side: pos.side === 'long' ? 'sell' : 'buy',
-        type: 'market',
-        qty,
-        timeInForce: 'day',
-      })
+      const order = new Order()
+      order.action = pos.side === 'long' ? 'SELL' : 'BUY'
+      order.orderType = 'MKT'
+      order.totalQuantity = quantity
+      order.tif = 'DAY'
+
+      return this.placeOrder(contract, order)
     }
 
     // Full close → native Alpaca API
     try {
       const result = await this.client.closePosition(symbol) as AlpacaOrderRaw
-      const isFilled = result.status === 'filled'
       return {
         success: true,
         orderId: result.id,
-        filledPrice: isFilled && result.filled_avg_price ? parseFloat(result.filled_avg_price) : undefined,
-        filledQty: isFilled && result.filled_qty ? parseFloat(result.filled_qty) : undefined,
+        orderState: makeOrderState(result.status),
       }
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) }
@@ -236,7 +290,7 @@ export class AlpacaAccount implements ITradingAccount {
 
   async getAccount(): Promise<AccountInfo> {
     const [account, positions, realizedPnL] = await Promise.all([
-      this.client.getAccount() as Promise<AlpacaAccountRaw>,
+      this.client.getAccount() as Promise<AlpacaBrokerRaw>,
       this.client.getPositions() as Promise<AlpacaPositionRaw[]>,
       this.getRealizedPnL(),
     ])
@@ -245,14 +299,12 @@ export class AlpacaAccount implements ITradingAccount {
     const unrealizedPnL = positions.reduce((sum, p) => sum + parseFloat(p.unrealized_pl), 0)
 
     return {
-      cash: parseFloat(account.cash),
-      equity: parseFloat(account.equity),
+      netLiquidation: parseFloat(account.equity),
+      totalCashValue: parseFloat(account.cash),
       unrealizedPnL,
       realizedPnL,
-      portfolioValue: parseFloat(account.portfolio_value),
       buyingPower: parseFloat(account.buying_power),
-      dayTradeCount: account.daytrade_count,
-      dayTradingBuyingPower: parseFloat(account.daytrading_buying_power),
+      dayTradesRemaining: account.daytrade_count != null ? Math.max(0, 3 - account.daytrade_count) : undefined,
     }
   }
 
@@ -262,18 +314,17 @@ export class AlpacaAccount implements ITradingAccount {
     return raw.map(p => ({
       contract: makeContract(p.symbol, this.provider),
       side: p.side === 'long' ? 'long' as const : 'short' as const,
-      qty: parseFloat(p.qty),
-      avgEntryPrice: parseFloat(p.avg_entry_price),
-      currentPrice: parseFloat(p.current_price),
+      quantity: new Decimal(p.qty),
+      avgCost: parseFloat(p.avg_entry_price),
+      marketPrice: parseFloat(p.current_price),
       marketValue: Math.abs(parseFloat(p.market_value)),
       unrealizedPnL: parseFloat(p.unrealized_pl),
-      unrealizedPnLPercent: parseFloat(p.unrealized_plpc) * 100,
-      costBasis: parseFloat(p.cost_basis),
+      realizedPnL: 0,
       leverage: 1,
     }))
   }
 
-  async getOrders(): Promise<Order[]> {
+  async getOrders(): Promise<OpenOrder[]> {
     const orders = await this.client.getOrders({
       status: 'all',
       limit: 100,
@@ -284,7 +335,7 @@ export class AlpacaAccount implements ITradingAccount {
       symbols: undefined,
     }) as AlpacaOrderRaw[]
 
-    return orders.map(o => this.mapOrder(o))
+    return orders.map(o => this.mapOpenOrder(o))
   }
 
   async getQuote(contract: Contract): Promise<Quote> {
@@ -308,7 +359,7 @@ export class AlpacaAccount implements ITradingAccount {
   getCapabilities(): AccountCapabilities {
     return {
       supportedSecTypes: ['STK'],
-      supportedOrderTypes: ['market', 'limit', 'stop', 'stop_limit', 'trailing_stop'],
+      supportedOrderTypes: ['MKT', 'LMT', 'STP', 'STP LMT', 'TRAIL'],
     }
   }
 
@@ -331,7 +382,7 @@ export class AlpacaAccount implements ITradingAccount {
    */
   private async getRealizedPnL(): Promise<number> {
     const now = Date.now()
-    if (this.realizedPnLCache && (now - this.realizedPnLCache.updatedAt) < AlpacaAccount.REALIZED_PNL_TTL_MS) {
+    if (this.realizedPnLCache && (now - this.realizedPnLCache.updatedAt) < AlpacaBroker.REALIZED_PNL_TTL_MS) {
       return this.realizedPnLCache.value
     }
 
@@ -342,7 +393,7 @@ export class AlpacaAccount implements ITradingAccount {
       return value
     } catch (err) {
       // On error, return cached value if available, otherwise 0
-      console.warn(`AlpacaAccount[${this.id}]: failed to fetch FILL activities:`, err)
+      console.warn(`AlpacaBroker[${this.id}]: failed to fetch FILL activities:`, err)
       return this.realizedPnLCache?.value ?? 0
     }
   }
@@ -376,23 +427,23 @@ export class AlpacaAccount implements ITradingAccount {
 
   // ---- Internal ----
 
-  private mapOrder(o: AlpacaOrderRaw): Order {
+  private mapOpenOrder(o: AlpacaOrderRaw): OpenOrder {
+    const contract = makeContract(o.symbol, this.provider)
+
+    const order = new Order()
+    order.action = o.side.toUpperCase() // buy → BUY
+    order.totalQuantity = new Decimal(o.qty ?? o.notional ?? '0')
+    order.orderType = (o.type ?? 'market').toUpperCase()
+    if (o.limit_price) order.lmtPrice = parseFloat(o.limit_price)
+    if (o.stop_price) order.auxPrice = parseFloat(o.stop_price)
+    if (o.time_in_force) order.tif = o.time_in_force.toUpperCase()
+    if (o.extended_hours) order.outsideRth = true
+    order.orderId = parseInt(o.id, 10) || 0
+
     return {
-      id: o.id,
-      contract: makeContract(o.symbol, this.provider),
-      side: o.side as 'buy' | 'sell',
-      type: o.type as Order['type'],
-      qty: parseFloat(o.qty ?? o.notional ?? '0'),
-      price: o.limit_price ? parseFloat(o.limit_price) : undefined,
-      stopPrice: o.stop_price ? parseFloat(o.stop_price) : undefined,
-      timeInForce: o.time_in_force as Order['timeInForce'],
-      extendedHours: o.extended_hours,
-      status: mapAlpacaOrderStatus(o.status),
-      filledPrice: o.filled_avg_price ? parseFloat(o.filled_avg_price) : undefined,
-      filledQty: o.filled_qty ? parseFloat(o.filled_qty) : undefined,
-      filledAt: o.filled_at ? new Date(o.filled_at) : undefined,
-      createdAt: new Date(o.created_at),
-      rejectReason: o.reject_reason ?? undefined,
+      contract,
+      order,
+      orderState: makeOrderState(o.status, o.reject_reason ?? undefined),
     }
   }
 }

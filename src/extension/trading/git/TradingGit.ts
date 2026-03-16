@@ -2,10 +2,10 @@
  * TradingGit — Trading-as-Git implementation
  *
  * Unified git-like operation tracking for all trading accounts.
- * Merges crypto-trading/wallet/Wallet.ts and securities-trading/wallet/SecWallet.ts.
  */
 
 import { createHash } from 'crypto'
+import { UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type { ITradingGit, TradingGitConfig } from './interfaces.js'
 import type {
   CommitHash,
@@ -25,6 +25,7 @@ import type {
   OrderStatusUpdate,
   SyncResult,
 } from './types.js'
+import { getOperationSymbol } from './types.js'
 
 function generateCommitHash(content: object): CommitHash {
   const hash = createHash('sha256')
@@ -147,7 +148,7 @@ export class TradingGit implements ITradingGit {
 
     if (symbol) {
       commits = commits.filter((c) =>
-        c.operations.some((op) => op.params.symbol === symbol),
+        c.operations.some((op) => getOperationSymbol(op) === symbol),
       )
     }
 
@@ -172,7 +173,7 @@ export class TradingGit implements ITradingGit {
     for (let i = 0; i < commit.operations.length; i++) {
       const op = commit.operations[i]
       const result = commit.results[i]
-      const symbol = (op.params.symbol as string) || 'unknown'
+      const symbol = getOperationSymbol(op)
 
       if (filterSymbol && symbol !== filterSymbol) continue
 
@@ -188,29 +189,26 @@ export class TradingGit implements ITradingGit {
   }
 
   private formatOperationChange(op: Operation, result?: OperationResult): string {
-    const { action, params } = op
-
-    switch (action) {
+    switch (op.action) {
       case 'placeOrder': {
-        const side = params.side as string
-        const notional = params.notional as number | undefined
-        const qty = params.qty as number | undefined
-        const size = params.size as number | undefined
-        const usdSize = params.usd_size as number | undefined
-        // Unified: try notional/usd_size for dollar amount, fall back to qty/size for quantity
-        const sizeStr = notional ? `$${notional}` : usdSize ? `$${usdSize}` : qty ? `${qty}` : size ? `${size}` : '?'
+        const side = op.order?.action || 'unknown' // BUY / SELL
+        const qty = op.order?.totalQuantity
+        const cashQty = op.order?.cashQty
+        const hasQty = qty && !qty.equals(UNSET_DECIMAL)
+        const hasCash = cashQty !== UNSET_DOUBLE && cashQty > 0
+        const sizeStr = hasCash ? `$${cashQty}` : hasQty ? `${qty}` : '?'
 
         if (result?.status === 'filled') {
-          const price = result.filledPrice ? ` @${result.filledPrice}` : ''
+          const price = result.execution?.price ? ` @${result.execution.price}` : ''
           return `${side} ${sizeStr}${price}`
         }
         return `${side} ${sizeStr} (${result?.status || 'unknown'})`
       }
 
       case 'closePosition': {
-        const qty = (params.qty ?? params.size) as number | undefined
+        const qty = op.quantity
         if (result?.status === 'filled') {
-          const price = result.filledPrice ? ` @${result.filledPrice}` : ''
+          const price = result.execution?.price ? ` @${result.execution.price}` : ''
           const qtyStr = qty ? ` (partial: ${qty})` : ''
           return `closed${qtyStr}${price}`
         }
@@ -218,22 +216,17 @@ export class TradingGit implements ITradingGit {
       }
 
       case 'modifyOrder': {
-        const orderId = params.orderId as string
-        const changes = Object.keys(params).filter(k => k !== 'orderId')
-        return `modified ${orderId} (${changes.join(', ')})`
+        return `modified ${op.orderId}`
       }
 
       case 'cancelOrder':
-        return `cancelled order ${params.orderId}`
+        return `cancelled order ${op.orderId}`
 
       case 'syncOrders': {
         const status = result?.status || 'unknown'
-        const price = result?.filledPrice ? ` @${result.filledPrice}` : ''
+        const price = result?.execution?.price ? ` @${result.execution.price}` : ''
         return `synced → ${status}${price}`
       }
-
-      default:
-        return `${action}`
     }
   }
 
@@ -284,14 +277,12 @@ export class TradingGit implements ITradingGit {
       hash,
       parentHash: this.head,
       message: `[sync] ${updates.length} order(s) updated`,
-      operations: [{ action: 'syncOrders', params: { orderIds: updates.map((u) => u.orderId) } }],
+      operations: [{ action: 'syncOrders' as const }],
       results: updates.map((u) => ({
         action: 'syncOrders' as const,
         success: true,
         orderId: u.orderId,
         status: u.currentStatus,
-        filledPrice: u.filledPrice,
-        filledQty: u.filledQty,
       })),
       stateAfter: currentState,
       timestamp: new Date().toISOString(),
@@ -330,7 +321,7 @@ export class TradingGit implements ITradingGit {
           !seen.has(result.orderId) &&
           orderStatus.get(result.orderId) === 'pending'
         ) {
-          const symbol = (commit.operations[j]?.params?.symbol as string) ?? 'unknown'
+          const symbol = getOperationSymbol(commit.operations[j])
           pending.push({ orderId: result.orderId, symbol })
           seen.add(result.orderId)
         }
@@ -346,7 +337,7 @@ export class TradingGit implements ITradingGit {
     priceChanges: PriceChangeInput[],
   ): Promise<SimulatePriceChangeResult> {
     const state = await this.config.getGitState()
-    const { positions, equity, unrealizedPnL, cash } = state
+    const { positions, netLiquidation: equity, unrealizedPnL, totalCashValue: cash } = state
 
     const currentTotalPnL = cash > 0 ? ((equity - cash) / cash) * 100 : 0
 
@@ -381,23 +372,25 @@ export class TradingGit implements ITradingGit {
 
       if (symbol === 'all') {
         for (const pos of positions) {
-          priceMap.set(pos.contract.symbol ?? 'unknown', this.applyPriceChange(pos.currentPrice, parsed.type, parsed.value))
+          priceMap.set(pos.contract.symbol || 'unknown', this.applyPriceChange(pos.marketPrice, parsed.type, parsed.value))
         }
       } else {
-        const pos = positions.find((p) => (p.contract.symbol ?? p.contract.aliceId) === symbol)
+        const pos = positions.find((p) => (p.contract.symbol || p.contract.aliceId) === symbol)
         if (pos) {
-          priceMap.set(symbol, this.applyPriceChange(pos.currentPrice, parsed.type, parsed.value))
+          priceMap.set(symbol, this.applyPriceChange(pos.marketPrice, parsed.type, parsed.value))
         }
       }
     }
 
+    const qty = (pos: typeof positions[0]) => pos.quantity.toNumber()
+
     // Current state
     const currentPositions = positions.map((pos) => ({
-      symbol: pos.contract.symbol ?? pos.contract.aliceId ?? 'unknown',
+      symbol: pos.contract.symbol || pos.contract.aliceId || 'unknown',
       side: pos.side,
-      qty: pos.qty,
-      avgEntryPrice: pos.avgEntryPrice,
-      currentPrice: pos.currentPrice,
+      qty: qty(pos),
+      avgCost: pos.avgCost,
+      marketPrice: pos.marketPrice,
       unrealizedPnL: pos.unrealizedPnL,
       marketValue: pos.marketValue,
     }))
@@ -405,15 +398,16 @@ export class TradingGit implements ITradingGit {
     // Simulated state
     let simulatedUnrealizedPnL = 0
     const simulatedPositions = positions.map((pos) => {
-      const sym = pos.contract.symbol ?? pos.contract.aliceId ?? 'unknown'
-      const simulatedPrice = priceMap.get(sym) ?? pos.currentPrice
-      const priceChange = simulatedPrice - pos.currentPrice
-      const priceChangePct = pos.currentPrice > 0 ? (priceChange / pos.currentPrice) * 100 : 0
+      const sym = pos.contract.symbol || pos.contract.aliceId || 'unknown'
+      const simulatedPrice = priceMap.get(sym) ?? pos.marketPrice
+      const priceChange = simulatedPrice - pos.marketPrice
+      const priceChangePct = pos.marketPrice > 0 ? (priceChange / pos.marketPrice) * 100 : 0
+      const q = qty(pos)
 
       const newPnL =
         pos.side === 'long'
-          ? (simulatedPrice - pos.avgEntryPrice) * pos.qty
-          : (pos.avgEntryPrice - simulatedPrice) * pos.qty
+          ? (simulatedPrice - pos.avgCost) * q
+          : (pos.avgCost - simulatedPrice) * q
 
       const pnlChange = newPnL - pos.unrealizedPnL
       simulatedUnrealizedPnL += newPnL
@@ -421,11 +415,11 @@ export class TradingGit implements ITradingGit {
       return {
         symbol: sym,
         side: pos.side,
-        qty: pos.qty,
-        avgEntryPrice: pos.avgEntryPrice,
+        qty: q,
+        avgCost: pos.avgCost,
         simulatedPrice,
         unrealizedPnL: newPnL,
-        marketValue: simulatedPrice * pos.qty,
+        marketValue: simulatedPrice * q,
         pnlChange,
         priceChangePercent: `${priceChangePct >= 0 ? '+' : ''}${priceChangePct.toFixed(2)}%`,
       }
@@ -508,7 +502,6 @@ export class TradingGit implements ITradingGit {
     }
 
     const success = rawObj.success === true
-    const order = rawObj.order as Record<string, unknown> | undefined
 
     if (!success) {
       return {
@@ -520,24 +513,25 @@ export class TradingGit implements ITradingGit {
       }
     }
 
-    if (!order) {
-      // Operations without an order result
-      return { action: op.action, success: true, status: 'filled', raw }
-    }
+    const orderId = rawObj.orderId as string | undefined
+    const execution = rawObj.execution as OperationResult['execution']
+    const orderState = rawObj.orderState as OperationResult['orderState']
 
-    const status = order.status as string
-    const isFilled = status === 'filled'
-    const isPending = status === 'pending'
+    // Determine status from execution or orderState
+    let status: OperationResult['status'] = 'filled'
+    if (execution?.price) {
+      status = 'filled'
+    } else if (orderId) {
+      status = 'pending'
+    }
 
     return {
       action: op.action,
       success: true,
-      orderId: order.id as string | undefined,
-      status: isFilled ? 'filled' : isPending ? 'pending' : 'rejected',
-      filledPrice: isFilled ? (order.filledPrice as number) : undefined,
-      filledQty: isFilled
-        ? ((order.filledQty ?? order.filledQuantity ?? order.qty ?? order.size) as number)
-        : undefined,
+      orderId,
+      status,
+      execution,
+      orderState,
       raw,
     }
   }

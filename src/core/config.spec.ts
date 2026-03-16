@@ -284,7 +284,7 @@ describe('writePlatformsConfig', () => {
 
 describe('writeAccountsConfig', () => {
   it('writes validated accounts to accounts.json', async () => {
-    await writeAccountsConfig([{ id: 'acc-1', platformId: 'plat-1' }])
+    await writeAccountsConfig([{ id: 'acc-1', platformId: 'plat-1', guards: [] }])
     const filePath = mockWriteFile.mock.calls[0][0] as string
     expect(filePath).toMatch(/accounts\.json$/)
   })

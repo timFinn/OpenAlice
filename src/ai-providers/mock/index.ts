@@ -18,9 +18,9 @@
  *   expect(provider.askCalls).toHaveLength(0)
  */
 
-import type { AIProvider, ProviderEvent, ProviderResult, GenerateOpts } from './types.js'
-import type { SessionEntry } from '../core/session.js'
-import type { MediaAttachment } from '../core/types.js'
+import type { AIProvider, ProviderEvent, ProviderResult, GenerateOpts } from '../types.js'
+import type { SessionEntry } from '../../core/session.js'
+import type { MediaAttachment } from '../../core/types.js'
 
 // ==================== Call Records ====================
 

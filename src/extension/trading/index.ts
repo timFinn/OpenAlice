@@ -1,18 +1,24 @@
-// Contract
-export type {
-  Contract,
-  SecType,
-  OptionType,
-  ComboLeg,
-  DeltaNeutralContract,
-} from './contract.js'
+// Contract extension (aliceId on IBKR Contract)
+import './contract-ext.js'
 
-// Interfaces
+// UTA
+export { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+export type { UnifiedTradingAccountOptions, StagePlaceOrderParams, StageModifyOrderParams, StageClosePositionParams } from './UnifiedTradingAccount.js'
+
+// AccountManager
+export { AccountManager } from './account-manager.js'
 export type {
+  AccountSummary,
+  AggregatedEquity,
+  ContractSearchResult,
+} from './account-manager.js'
+
+// Brokers (types + implementations + factory)
+export type {
+  IBroker,
   Position,
-  OrderRequest,
-  OrderResult,
-  Order,
+  PlaceOrderResult,
+  OpenOrder,
   AccountInfo,
   Quote,
   FundingRate,
@@ -20,18 +26,19 @@ export type {
   OrderBook,
   MarketClock,
   AccountCapabilities,
-  ITradingAccount,
-  WalletState,
-} from './interfaces.js'
-
-// AccountManager
-export { AccountManager } from './account-manager.js'
-export type {
-  AccountEntry,
-  AccountSummary,
-  AggregatedEquity,
-  ContractSearchResult,
-} from './account-manager.js'
+} from './brokers/index.js'
+export type { IPlatform, PlatformCredentials } from './brokers/index.js'
+export {
+  createPlatformFromConfig,
+  createBrokerFromConfig,
+  validatePlatformRefs,
+  AlpacaBroker,
+  AlpacaPlatform,
+  CcxtBroker,
+  CcxtPlatform,
+  createCcxtProviderTools,
+} from './brokers/index.js'
+export type { AlpacaBrokerConfig, AlpacaPlatformConfig, CcxtBrokerConfig, CcxtPlatformConfig } from './brokers/index.js'
 
 // Trading-as-Git
 export { TradingGit } from './git/index.js'
@@ -73,35 +80,5 @@ export type {
   GuardRegistryEntry,
 } from './guards/index.js'
 
-// Operation Dispatcher
-export { createOperationDispatcher } from './operation-dispatcher.js'
-
-// Wallet State Bridge
-export { createWalletStateBridge } from './wallet-state-bridge.js'
-
-// Platform
-export type { IPlatform, PlatformCredentials } from './platform.js'
-export { CcxtPlatform } from './providers/ccxt/CcxtPlatform.js'
-export type { CcxtPlatformConfig } from './providers/ccxt/CcxtPlatform.js'
-export { AlpacaPlatform } from './providers/alpaca/AlpacaPlatform.js'
-export type { AlpacaPlatformConfig } from './providers/alpaca/AlpacaPlatform.js'
-export {
-  createPlatformFromConfig,
-  createAccountFromConfig,
-  validatePlatformRefs,
-} from './platform-factory.js'
-
-// Factory (wiring)
-export { wireAccountTrading } from './factory.js'
-export type { AccountSetup } from './factory.js'
-
-// Unified Tool Factory
-export { createTradingTools, resolveAccounts, resolveOne } from './adapter.js'
-export type { AccountResolver, ResolvedAccount } from './adapter.js'
-
-// Providers
-export { AlpacaAccount } from './providers/alpaca/index.js'
-export type { AlpacaAccountConfig } from './providers/alpaca/index.js'
-export { CcxtAccount } from './providers/ccxt/index.js'
-export { createCcxtProviderTools } from './providers/ccxt/index.js'
-export type { CcxtAccountConfig } from './providers/ccxt/index.js'
+// AI Tool Factory
+export { createTradingTools } from './adapter.js'

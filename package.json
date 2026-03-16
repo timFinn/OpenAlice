@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "tsx src/main.ts",
     "dev:ui": "pnpm --filter open-alice-ui dev",
-    "predev": "pnpm --filter opentypebb build",
-    "build": "pnpm --filter opentypebb build && pnpm build:ui && pnpm build:backend",
+    "predev": "pnpm --filter opentypebb build && pnpm --filter @traderalice/ibkr build",
+    "build": "pnpm --filter opentypebb build && pnpm --filter @traderalice/ibkr build && pnpm build:ui && pnpm build:backend",
     "build:ui": "pnpm --filter open-alice-ui build",
     "build:backend": "tsup src/main.ts --format esm --dts",
     "start": "node dist/main.js",
@@ -37,8 +37,9 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.72",
     "@grammyjs/auto-retry": "^2.0.2",
     "@hono/node-server": "^1.19.11",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@sinclair/typebox": "0.34.48",
+    "@traderalice/ibkr": "workspace:*",
     "@traderalice/opentypebb": "workspace:*",
     "ai": "^6.0.86",
     "ajv": "^8.18.0",
@@ -46,7 +47,7 @@
     "chalk": "^5.6.2",
     "decimal.js": "^10.6.0",
     "express": "^5.2.1",
-    "file-type": "^21.3.0",
+    "file-type": "^21.3.2",
     "grammy": "^1.40.0",
     "hono": "^4.12.7",
     "json5": "^2.2.3",
@@ -54,9 +55,15 @@
     "playwright-core": "1.58.2",
     "sharp": "^0.34.5",
     "tslog": "^4.10.2",
-    "undici": "^7.22.0",
+    "undici": "^7.24.4",
     "ws": "^8.19.0",
     "zod": "^4.3.6"
+  },
+  "pnpm": {
+    "overrides": {
+      "@alpacahq/alpaca-trade-api>axios": "^0.30.3",
+      "@alpacahq/alpaca-trade-api>eslint": "-"
+    }
   },
   "devDependencies": {
     "@ai-sdk/provider": "^3.0.8",

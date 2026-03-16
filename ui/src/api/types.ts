@@ -151,14 +151,13 @@ export interface TradingAccount {
 }
 
 export interface AccountInfo {
-  cash: number
-  equity: number
+  netLiquidation: number
+  totalCashValue: number
   unrealizedPnL: number
   realizedPnL: number
-  portfolioValue?: number
   buyingPower?: number
-  totalMargin?: number
-  dayTradeCount?: number
+  initMarginReq?: number
+  maintMarginReq?: number
 }
 
 export interface Position {
@@ -175,14 +174,13 @@ export interface Position {
     localSymbol?: string
   }
   side: 'long' | 'short'
-  qty: number
-  avgEntryPrice: number
-  currentPrice: number
+  quantity: string // Decimal serialized as string
+  avgCost: number
+  marketPrice: number
   marketValue: number
   unrealizedPnL: number
-  unrealizedPnLPercent: number
-  costBasis: number
-  leverage: number
+  realizedPnL: number
+  leverage?: number
   margin?: number
   liquidationPrice?: number
 }

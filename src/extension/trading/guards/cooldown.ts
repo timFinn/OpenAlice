@@ -1,4 +1,5 @@
 import type { OperationGuard, GuardContext } from './types.js'
+import { getOperationSymbol } from '../git/types.js'
 
 const DEFAULT_MIN_INTERVAL_MS = 60_000
 
@@ -14,7 +15,7 @@ export class CooldownGuard implements OperationGuard {
   check(ctx: GuardContext): string | null {
     if (ctx.operation.action !== 'placeOrder') return null
 
-    const symbol = ctx.operation.params.symbol as string
+    const symbol = getOperationSymbol(ctx.operation)
     const now = Date.now()
     const lastTime = this.lastTradeTime.get(symbol)
 

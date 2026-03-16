@@ -24,8 +24,9 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 ## Features
 
 - **Multi-provider AI** — switch between Claude Code CLI, Vercel AI SDK, and Agent SDK at runtime, no restart needed
-- **Unified trading** — multi-account architecture supporting CCXT (Bybit, OKX, Binance, etc.) and Alpaca (US equities) with a git-like workflow (stage, commit, push)
-- **Guard pipeline** — extensible pre-execution safety checks (max position size, cooldown between trades, symbol whitelist)
+- **Unified Trading Account (UTA)** — each trading account is a self-contained entity that owns its broker connection, git-like operation history, and guard pipeline. AI interacts with UTAs, never with brokers directly. All order types use IBKR's type system (`@traderalice/ibkr`) as the single source of truth, with Alpaca and CCXT adapting to it
+- **Trading-as-Git** — stage orders, commit with a message, push to execute. Every commit gets an 8-char hash. Full history reviewable via `tradingLog` / `tradingShow`
+- **Guard pipeline** — pre-execution safety checks (max position size, cooldown, symbol whitelist) that run inside each UTA before orders reach the broker
 - **Market data** — TypeScript-native OpenBB engine (`opentypebb`) with no external sidecar required. Covers equity, crypto, commodity, currency, and macro data with unified symbol search (`marketSearchForResearch`) and technical indicator calculator. Can also expose an embedded OpenBB-compatible HTTP API for external tools
 - **Equity research** — company profiles, financial statements, ratios, analyst estimates, earnings calendar, insider trading, and market movers (top gainers, losers, most active)
 - **News collector** — background RSS collection from configurable feeds with archive search tools (`globNews`/`grepNews`/`readNews`). Also captures OpenBB news API results via piggyback
@@ -42,9 +43,11 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 
 **Extension** — A self-contained tool package registered in ToolCenter. Each extension owns its tools, state, and persistence. Examples: trading, brain, analysis-kit.
 
-**Trading** — A git-like workflow for trading operations. You stage orders, commit with a message, then push to execute. Every commit gets an 8-char hash. Full history is reviewable via `tradingLog` / `tradingShow`.
+**UTA (Unified Trading Account)** — The core business entity for trading. Each UTA owns a broker connection (`IBroker`), a git-like operation history (`TradingGit`), and a guard pipeline. Think of it as a git repository for trades — multiple UTAs are like a monorepo with independent histories. AI and the frontend interact with UTAs exclusively; brokers are internal implementation details. All types (Contract, Order, Execution, OrderState) come from IBKR's type system via `@traderalice/ibkr`.
 
-**Guard** — A pre-execution check that runs before every trading operation reaches the exchange. Guards enforce limits (max position size, cooldown between trades, symbol whitelist) and can be configured per-asset.
+**Trading-as-Git** — The workflow inside each UTA. Stage operations (`stagePlaceOrder`, `stageClosePosition`, etc.), commit with a message, then push to execute. Push runs guards, dispatches to the broker, snapshots account state, and records a commit with an 8-char hash. Full history is reviewable via `tradingLog` / `tradingShow`.
+
+**Guard** — A pre-execution check that runs inside a UTA before operations reach the broker. Guards enforce limits (max position size, cooldown between trades, symbol whitelist) and are configured per-account.
 
 **Connector** — An external interface through which users interact with Alice. Built-in: Web UI, Telegram, MCP Ask. Connectors register with ConnectorCenter; delivery always goes to the channel of last interaction.
 
@@ -78,8 +81,11 @@ graph LR
   subgraph Extensions
     OBB[OpenBB Data]
     AK[Analysis Kit]
-    TR[Trading]
-    GD[Guards]
+    subgraph UTA[Unified Trading Account]
+      TR[Trading Git]
+      GD[Guards]
+      BK[Brokers]
+    end
     NC[News Collector]
     BR[Brain]
     BW[Browser]
@@ -106,8 +112,9 @@ graph LR
   OBB --> AK
   OBB --> NC
   AK --> TC
-  TR --> TC
   GD --> TR
+  TR --> BK
+  UTA --> TC
   NC --> TC
   BR --> TC
   BW --> TC
@@ -125,7 +132,7 @@ graph LR
 
 **Core** — `AgentCenter` is the top-level orchestration center that routes all calls (both stateless and session-aware) through `ProviderRouter`. `ToolCenter` is a centralized tool registry — extensions register tools there, and it exports them in Vercel AI SDK and MCP formats. `EventLog` provides persistent append-only event storage (JSONL) with real-time subscriptions and crash recovery. `ConnectorCenter` tracks which channel the user last spoke through.
 
-**Extensions** — domain-specific tool sets registered in `ToolCenter`. Each extension owns its tools, state, and persistence. `Guards` enforce pre-execution safety checks (position size limits, trade cooldowns, symbol whitelist) on all trading operations. `NewsCollector` runs background RSS fetches and piggybacks OpenBB news calls into a persistent archive searchable by the agent.
+**Extensions** — domain-specific tool sets registered in `ToolCenter`. Each extension owns its tools, state, and persistence. The trading extension centers on `UnifiedTradingAccount` (UTA) — each UTA bundles a broker connection, git-like operation history, and guard pipeline into a single entity. Guards enforce pre-execution safety checks (position size limits, trade cooldowns, symbol whitelist) inside each UTA before orders reach the broker. `NewsCollector` runs background RSS fetches and piggybacks OpenBB news calls into a persistent archive searchable by the agent.
 
 **Tasks** — scheduled background work. `CronEngine` manages jobs and fires `cron.fire` events into the EventLog on schedule; a listener picks them up, runs them through `AgentCenter`, and delivers replies via `ConnectorCenter`. `Heartbeat` is a periodic health-check that uses a structured response protocol (HEARTBEAT_OK / CHAT_NO / CHAT_YES).
 
@@ -159,7 +166,7 @@ All config lives in `data/config/` as JSON files with Zod validation. Missing fi
 
 **AI Provider** — The default provider is Claude Code (`claude -p` subprocess). To use the [Vercel AI SDK](https://sdk.vercel.ai/docs) instead (Anthropic, OpenAI, Google, etc.), switch `ai-provider.json` to `vercel-ai-sdk` and add your API key to `api-keys.json`. A third option, Agent SDK (`@anthropic-ai/claude-agent-sdk`), is also available via `agent-sdk`.
 
-**Trading** — Multi-account architecture. Crypto via [CCXT](https://docs.ccxt.com/) (Bybit, OKX, Binance, etc.) configured in `crypto.json`. US equities via [Alpaca](https://alpaca.markets/) configured in `securities.json`. Both use the same git-like trading workflow.
+**Trading** — Unified Trading Account (UTA) architecture. Define platforms in `platforms.json` (CCXT exchanges, Alpaca), then create accounts in `accounts.json` referencing a platform. Each account becomes a UTA with its own git history and guard config. Legacy `crypto.json` and `securities.json` are still supported.
 
 | File | Purpose |
 |------|---------|
@@ -220,7 +227,13 @@ src/
     market/                  # Unified symbol search across equity, crypto, currency
     news/                    # OpenBB news tools (world + company headlines)
     news-collector/          # RSS collector, piggyback wrapper, archive search tools
-    trading/                 # Unified multi-account trading (CCXT + Alpaca), guard pipeline, git-like commit history
+    trading/                 # Unified Trading Account (UTA): brokers, git-like commits, guards, AI tool adapter
+      UnifiedTradingAccount.ts  # UTA class — owns broker + git + guards
+      brokers/               # IBroker interface + Alpaca/CCXT implementations
+      git/                   # Trading-as-Git engine (stage → commit → push)
+      guards/                # Pre-execution safety checks (position size, cooldown, whitelist)
+      adapter.ts             # AI tool definitions (Zod schemas → UTA methods)
+      account-manager.ts     # Multi-UTA registry and routing
     thinking-kit/            # Reasoning and calculation tools
     brain/                   # Cognitive state (memory, emotion)
     browser/                 # Browser automation bridge (via OpenClaw)
@@ -263,8 +276,8 @@ docs/                        # Architecture documentation
 Open Alice is in pre-release. The following items must land before the first stable version:
 
 - [ ] **Tool confirmation** — sensitive tools (order placement, cancellation, position close) require explicit user confirmation before execution, with a per-tool bypass mechanism for trusted workflows
-- [ ] **Trading-as-Git stable interface** — finalize the stage → commit → push API surface (including `tradingStatus`, `tradingLog`, `tradingShow`, `tradingSync`) as a stable, versioned contract
-- [ ] **IBKR adapter** — Interactive Brokers integration via the Client Portal or TWS API, adding a third trading backend alongside CCXT and Alpaca
+- [ ] **Trading-as-Git stable interface** — the UTA class and git workflow are functional; remaining work is serialization format (FIX-like tag-value encoding for Operation persistence) and the `tradingSync` polling loop
+- [ ] **IBKR broker** — Interactive Brokers integration via TWS API. The `@traderalice/ibkr` TypeScript SDK (full TWS protocol port) is complete; remaining work is implementing `IBroker` against it
 - [ ] **Account snapshot & analytics** — unified trading account snapshots with P&L breakdown, exposure analysis, and historical performance tracking
 
 ## Star History

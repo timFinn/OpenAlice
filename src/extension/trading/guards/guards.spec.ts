@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import Decimal from 'decimal.js'
+import { Contract, Order, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import { MaxPositionSizeGuard } from './max-position-size.js'
 import { CooldownGuard } from './cooldown.js'
 import { SymbolWhitelistGuard } from './symbol-whitelist.js'
@@ -6,10 +8,29 @@ import { createGuardPipeline } from './guard-pipeline.js'
 import { resolveGuards, registerGuard } from './registry.js'
 import type { GuardContext, OperationGuard } from './types.js'
 import type { Operation } from '../git/types.js'
-import type { AccountInfo, Position } from '../interfaces.js'
-import { MockTradingAccount, makePosition } from '../__test__/mock-account.js'
+import type { AccountInfo, Position } from '../brokers/types.js'
+import { MockBroker, makeContract, makePosition } from '../__test__/mock-broker.js'
+import '../contract-ext.js'
 
 // ==================== Helpers ====================
+
+function makePlaceOrderOp(overrides: {
+  symbol?: string
+  action?: 'BUY' | 'SELL'
+  orderType?: string
+  cashQty?: number
+  totalQuantity?: Decimal
+} = {}): Operation {
+  const contract = makeContract({ symbol: overrides.symbol ?? 'AAPL' })
+  const order = new Order()
+  order.action = overrides.action ?? 'BUY'
+  order.orderType = overrides.orderType ?? 'MKT'
+  order.totalQuantity = overrides.totalQuantity ?? new Decimal(10)
+  if (overrides.cashQty != null) {
+    order.cashQty = overrides.cashQty
+  }
+  return { action: 'placeOrder', contract, order }
+}
 
 function makeContext(overrides: {
   operation?: Operation
@@ -17,14 +38,11 @@ function makeContext(overrides: {
   account?: Partial<AccountInfo>
 } = {}): GuardContext {
   return {
-    operation: overrides.operation ?? {
-      action: 'placeOrder',
-      params: { symbol: 'AAPL', side: 'buy', type: 'market', qty: 10 },
-    },
+    operation: overrides.operation ?? makePlaceOrderOp(),
     positions: overrides.positions ?? [],
     account: {
-      cash: 100_000,
-      equity: 100_000,
+      netLiquidation: 100_000,
+      totalCashValue: 100_000,
       unrealizedPnL: 0,
       realizedPnL: 0,
       ...overrides.account,
@@ -38,11 +56,8 @@ describe('MaxPositionSizeGuard', () => {
   it('allows order within limit', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
-      operation: {
-        action: 'placeOrder',
-        params: { symbol: 'AAPL', side: 'buy', type: 'market', notional: 20_000 },
-      },
-      account: { equity: 100_000 },
+      operation: makePlaceOrderOp({ cashQty: 20_000 }),
+      account: { netLiquidation: 100_000 },
     })
 
     expect(guard.check(ctx)).toBeNull()
@@ -51,11 +66,8 @@ describe('MaxPositionSizeGuard', () => {
   it('rejects order exceeding limit', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
-      operation: {
-        action: 'placeOrder',
-        params: { symbol: 'AAPL', side: 'buy', type: 'market', notional: 30_000 },
-      },
-      account: { equity: 100_000 },
+      operation: makePlaceOrderOp({ cashQty: 30_000 }),
+      account: { netLiquidation: 100_000 },
     })
 
     const result = guard.check(ctx)
@@ -67,12 +79,9 @@ describe('MaxPositionSizeGuard', () => {
   it('considers existing position value', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
-      operation: {
-        action: 'placeOrder',
-        params: { symbol: 'AAPL', side: 'buy', type: 'market', notional: 10_000 },
-      },
-      positions: [makePosition({ contract: { symbol: 'AAPL' }, marketValue: 20_000 })],
-      account: { equity: 100_000 },
+      operation: makePlaceOrderOp({ cashQty: 10_000 }),
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 20_000 })],
+      account: { netLiquidation: 100_000 },
     })
 
     const result = guard.check(ctx)
@@ -84,19 +93,17 @@ describe('MaxPositionSizeGuard', () => {
   it('uses default 25% if no option provided', () => {
     const guard = new MaxPositionSizeGuard({})
     const ctx = makeContext({
-      operation: {
-        action: 'placeOrder',
-        params: { symbol: 'AAPL', side: 'buy', type: 'market', notional: 26_000 },
-      },
-      account: { equity: 100_000 },
+      operation: makePlaceOrderOp({ cashQty: 26_000 }),
+      account: { netLiquidation: 100_000 },
     })
     expect(guard.check(ctx)).not.toBeNull()
   })
 
   it('skips non-placeOrder operations', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 1 })
+    const contract = makeContract({ symbol: 'AAPL' })
     const ctx = makeContext({
-      operation: { action: 'closePosition', params: { symbol: 'AAPL' } },
+      operation: { action: 'closePosition', contract },
     })
     expect(guard.check(ctx)).toBeNull()
   })
@@ -104,10 +111,7 @@ describe('MaxPositionSizeGuard', () => {
   it('allows when addedValue cannot be estimated (qty-based, no existing position)', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 1 })
     const ctx = makeContext({
-      operation: {
-        action: 'placeOrder',
-        params: { symbol: 'NEW_STOCK', side: 'buy', type: 'market', qty: 100 },
-      },
+      operation: makePlaceOrderOp({ symbol: 'NEW_STOCK', totalQuantity: new Decimal(100) }),
     })
     expect(guard.check(ctx)).toBeNull()
   })
@@ -137,19 +141,20 @@ describe('CooldownGuard', () => {
     const guard = new CooldownGuard({ minIntervalMs: 60_000 })
 
     guard.check(makeContext({
-      operation: { action: 'placeOrder', params: { symbol: 'AAPL', side: 'buy', type: 'market', qty: 1 } },
+      operation: makePlaceOrderOp({ symbol: 'AAPL' }),
     }))
 
     const result = guard.check(makeContext({
-      operation: { action: 'placeOrder', params: { symbol: 'GOOG', side: 'buy', type: 'market', qty: 1 } },
+      operation: makePlaceOrderOp({ symbol: 'GOOG' }),
     }))
     expect(result).toBeNull()
   })
 
   it('skips non-placeOrder operations', () => {
     const guard = new CooldownGuard({ minIntervalMs: 60_000 })
+    const contract = makeContract({ symbol: 'AAPL' })
     const ctx = makeContext({
-      operation: { action: 'closePosition', params: { symbol: 'AAPL' } },
+      operation: { action: 'closePosition', contract },
     })
     expect(guard.check(ctx)).toBeNull()
   })
@@ -178,7 +183,7 @@ describe('SymbolWhitelistGuard', () => {
   it('allows operations without a symbol param', () => {
     const guard = new SymbolWhitelistGuard({ symbols: ['AAPL'] })
     const ctx = makeContext({
-      operation: { action: 'cancelOrder', params: { orderId: '123' } },
+      operation: { action: 'cancelOrder', orderId: '123' },
     })
     expect(guard.check(ctx)).toBeNull()
   })
@@ -189,7 +194,7 @@ describe('SymbolWhitelistGuard', () => {
 describe('createGuardPipeline', () => {
   it('returns dispatcher directly when no guards', () => {
     const dispatcher = vi.fn().mockResolvedValue({ success: true })
-    const account = new MockTradingAccount()
+    const account = new MockBroker()
     const pipeline = createGuardPipeline(dispatcher, account, [])
 
     // Should be the same function reference
@@ -198,11 +203,11 @@ describe('createGuardPipeline', () => {
 
   it('passes through when all guards allow', async () => {
     const dispatcher = vi.fn().mockResolvedValue({ success: true })
-    const account = new MockTradingAccount()
+    const account = new MockBroker()
     const allowGuard: OperationGuard = { name: 'allow-all', check: () => null }
 
     const pipeline = createGuardPipeline(dispatcher, account, [allowGuard])
-    const op: Operation = { action: 'placeOrder', params: { symbol: 'AAPL', side: 'buy', type: 'market', qty: 1 } }
+    const op: Operation = makePlaceOrderOp()
     const result = await pipeline(op)
 
     expect(dispatcher).toHaveBeenCalledWith(op)
@@ -211,11 +216,11 @@ describe('createGuardPipeline', () => {
 
   it('blocks when a guard rejects', async () => {
     const dispatcher = vi.fn().mockResolvedValue({ success: true })
-    const account = new MockTradingAccount()
+    const account = new MockBroker()
     const denyGuard: OperationGuard = { name: 'deny-all', check: () => 'Denied!' }
 
     const pipeline = createGuardPipeline(dispatcher, account, [denyGuard])
-    const op: Operation = { action: 'placeOrder', params: { symbol: 'AAPL', side: 'buy', type: 'market', qty: 1 } }
+    const op: Operation = makePlaceOrderOp()
     const result = await pipeline(op) as Record<string, unknown>
 
     expect(dispatcher).not.toHaveBeenCalled()
@@ -226,13 +231,13 @@ describe('createGuardPipeline', () => {
 
   it('stops at first rejecting guard', async () => {
     const dispatcher = vi.fn().mockResolvedValue({ success: true })
-    const account = new MockTradingAccount()
+    const account = new MockBroker()
     const guardA: OperationGuard = { name: 'A', check: vi.fn().mockReturnValue(null) }
     const guardB: OperationGuard = { name: 'B', check: vi.fn().mockReturnValue('Blocked by B') }
     const guardC: OperationGuard = { name: 'C', check: vi.fn().mockReturnValue(null) }
 
     const pipeline = createGuardPipeline(dispatcher, account, [guardA, guardB, guardC])
-    const op: Operation = { action: 'placeOrder', params: { symbol: 'AAPL', side: 'buy', type: 'market', qty: 1 } }
+    const op: Operation = makePlaceOrderOp()
     await pipeline(op)
 
     expect(guardA.check).toHaveBeenCalled()
@@ -242,7 +247,7 @@ describe('createGuardPipeline', () => {
 
   it('fetches positions and account info for guard context', async () => {
     const dispatcher = vi.fn().mockResolvedValue({ success: true })
-    const account = new MockTradingAccount()
+    const account = new MockBroker()
     account.setPositions([makePosition()])
 
     let capturedCtx: GuardContext | undefined
@@ -252,11 +257,11 @@ describe('createGuardPipeline', () => {
     }
 
     const pipeline = createGuardPipeline(dispatcher, account, [spyGuard])
-    await pipeline({ action: 'placeOrder', params: { symbol: 'AAPL', side: 'buy', type: 'market', qty: 1 } })
+    await pipeline(makePlaceOrderOp())
 
     expect(capturedCtx).toBeDefined()
     expect(capturedCtx!.positions).toHaveLength(1)
-    expect(capturedCtx!.account.equity).toBe(105_000)
+    expect(capturedCtx!.account.netLiquidation).toBe(105_000)
   })
 })
 
