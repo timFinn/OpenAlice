@@ -173,7 +173,7 @@ export class UnifiedTradingAccount {
     order.orderType = toIbkrOrderType(params.type)
     order.tif = toIbkrTif(params.timeInForce ?? 'day')
 
-    if (params.qty != null) order.totalQuantity = new Decimal(params.qty)
+    if (params.qty != null) order.totalQuantity = new Decimal(String(params.qty))
     if (params.notional != null) order.cashQty = params.notional
     if (params.price != null) order.lmtPrice = params.price
     if (params.stopPrice != null) order.auxPrice = params.stopPrice
@@ -189,7 +189,7 @@ export class UnifiedTradingAccount {
 
   stageModifyOrder(params: StageModifyOrderParams): AddResult {
     const changes: Partial<Order> = {}
-    if (params.qty != null) changes.totalQuantity = new Decimal(params.qty)
+    if (params.qty != null) changes.totalQuantity = new Decimal(String(params.qty))
     if (params.price != null) changes.lmtPrice = params.price
     if (params.stopPrice != null) changes.auxPrice = params.stopPrice
     if (params.trailingAmount != null) changes.auxPrice = params.trailingAmount
@@ -209,7 +209,7 @@ export class UnifiedTradingAccount {
     return this.git.add({
       action: 'closePosition',
       contract,
-      quantity: params.qty != null ? new Decimal(params.qty) : undefined,
+      quantity: params.qty != null ? new Decimal(String(params.qty)) : undefined,
     })
   }
 

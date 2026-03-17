@@ -168,7 +168,7 @@ export class AlpacaBroker implements IBroker {
 
       // Quantity: totalQuantity or cashQty (notional)
       if (!order.totalQuantity.equals(UNSET_DECIMAL)) {
-        alpacaOrder.qty = order.totalQuantity.toNumber()
+        alpacaOrder.qty = parseFloat(order.totalQuantity.toString())
       } else if (order.cashQty !== UNSET_DOUBLE) {
         alpacaOrder.notional = order.cashQty
       }
@@ -224,7 +224,7 @@ export class AlpacaBroker implements IBroker {
   async modifyOrder(orderId: string, changes: Order): Promise<PlaceOrderResult> {
     try {
       const patch: Record<string, unknown> = {}
-      if (!changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = changes.totalQuantity.toNumber()
+      if (!changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = parseFloat(changes.totalQuantity.toString())
       if (changes.lmtPrice !== UNSET_DOUBLE) patch.limit_price = changes.lmtPrice
       if (changes.auxPrice !== UNSET_DOUBLE) patch.stop_price = changes.auxPrice
       if (changes.trailingPercent !== UNSET_DOUBLE) patch.trail = changes.trailingPercent

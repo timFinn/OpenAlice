@@ -249,7 +249,7 @@ export class CcxtBroker implements IBroker {
 
   // ---- Trading operations ----
 
-  async placeOrder(contract: Contract, order: Order): Promise<PlaceOrderResult> {
+  async placeOrder(contract: Contract, order: Order, extraParams?: Record<string, unknown>): Promise<PlaceOrderResult> {
     this.ensureInit()
     this.ensureWritable()
 
@@ -258,8 +258,9 @@ export class CcxtBroker implements IBroker {
       return { success: false, error: 'Cannot resolve contract to CCXT symbol' }
     }
 
-    let size = !order.totalQuantity.equals(UNSET_DECIMAL)
-      ? order.totalQuantity.toNumber()
+    // Use toString() to preserve Decimal precision — never go through IEEE 754 float
+    let size: string | undefined = !order.totalQuantity.equals(UNSET_DECIMAL)
+      ? order.totalQuantity.toString()
       : undefined
 
     // cashQty (notional) → size conversion
@@ -269,7 +270,7 @@ export class CcxtBroker implements IBroker {
       if (!price) {
         return { success: false, error: 'Cannot determine price for notional conversion' }
       }
-      size = order.cashQty / price
+      size = String(order.cashQty / price)
     }
 
     if (!size) {
@@ -277,9 +278,7 @@ export class CcxtBroker implements IBroker {
     }
 
     try {
-      const params: Record<string, unknown> = {}
-      // Check for reduce-only — IBKR doesn't have this natively, but we support it
-      // Providers can set this via order misc options or we check a custom field
+      const params: Record<string, unknown> = { ...extraParams }
 
       const ccxtOrderType = ibkrOrderTypeToCcxt(order.orderType)
       const side = order.action.toLowerCase() as 'buy' | 'sell'
@@ -288,7 +287,7 @@ export class CcxtBroker implements IBroker {
         ccxtSymbol,
         ccxtOrderType,
         side,
-        size,
+        parseFloat(size),
         ccxtOrderType === 'limit' && order.lmtPrice !== UNSET_DOUBLE ? order.lmtPrice : undefined,
         params,
       )
@@ -345,7 +344,7 @@ export class CcxtBroker implements IBroker {
 
       // editOrder requires type and side — fetch the original order to fill in defaults
       const original = await this.exchange.fetchOrder(orderId, ccxtSymbol)
-      const qty = !changes.totalQuantity.equals(UNSET_DECIMAL) ? changes.totalQuantity.toNumber() : original.amount
+      const qty = !changes.totalQuantity.equals(UNSET_DECIMAL) ? parseFloat(changes.totalQuantity.toString()) : original.amount
       const price = changes.lmtPrice !== UNSET_DOUBLE ? changes.lmtPrice : original.price
 
       const result = await this.exchange.editOrder(
@@ -389,7 +388,7 @@ export class CcxtBroker implements IBroker {
     order.orderType = 'MKT'
     order.totalQuantity = quantity ?? pos.quantity
 
-    return this.placeOrder(pos.contract, order)
+    return this.placeOrder(pos.contract, order, { reduceOnly: true })
   }
 
   // ---- Queries ----
@@ -435,18 +434,21 @@ export class CcxtBroker implements IBroker {
       const market = this.markets[p.symbol]
       if (!market) continue
 
-      const size = Math.abs(parseFloat(String(p.contracts ?? 0)) * parseFloat(String(p.contractSize ?? 1)))
-      if (size === 0) continue
+      // Use Decimal arithmetic to avoid IEEE 754 precision loss (e.g. 0.51 → 0.50999...)
+      const contracts = new Decimal(String(p.contracts ?? 0)).abs()
+      const contractSize = new Decimal(String(p.contractSize ?? 1))
+      const quantity = contracts.mul(contractSize)
+      if (quantity.isZero()) continue
 
       const markPrice = parseFloat(String(p.markPrice ?? 0))
       const entryPrice = parseFloat(String(p.entryPrice ?? 0))
-      const marketValue = size * markPrice
+      const marketValue = quantity.toNumber() * markPrice
       const unrealizedPnL = parseFloat(String(p.unrealizedPnl ?? 0))
 
       result.push({
         contract: marketToContract(market, this.exchangeName),
         side: p.side === 'long' ? 'long' : 'short',
-        quantity: new Decimal(size),
+        quantity,
         avgCost: entryPrice,
         marketPrice: markPrice,
         marketValue,
