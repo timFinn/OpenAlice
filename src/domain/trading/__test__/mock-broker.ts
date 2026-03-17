@@ -175,6 +175,11 @@ export class MockBroker implements IBroker {
   getOrders = vi.fn<() => Promise<OpenOrder[]>>()
     .mockImplementation(async () => this._orders)
 
+  getOrder = vi.fn<(orderId: string) => Promise<OpenOrder | null>>()
+    .mockImplementation(async (orderId: string) => {
+      return this._orders.find(o => String(o.order.orderId) === orderId) ?? null
+    })
+
   // ---- Test helpers ----
 
   setPositions(positions: Position[]): void {

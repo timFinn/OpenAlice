@@ -338,6 +338,15 @@ export class AlpacaBroker implements IBroker {
     return orders.map(o => this.mapOpenOrder(o))
   }
 
+  async getOrder(orderId: string): Promise<OpenOrder | null> {
+    try {
+      const raw = await this.client.getOrder({ order_id: orderId }) as AlpacaOrderRaw
+      return this.mapOpenOrder(raw)
+    } catch {
+      return null
+    }
+  }
+
   async getQuote(contract: Contract): Promise<Quote> {
     const symbol = resolveSymbol(contract, this.provider)
     if (!symbol) throw new Error('Cannot resolve contract to Alpaca symbol')

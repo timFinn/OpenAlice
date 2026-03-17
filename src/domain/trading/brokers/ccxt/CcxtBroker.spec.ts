@@ -246,6 +246,97 @@ describe('CcxtBroker — placeOrder notional', () => {
   })
 })
 
+// ==================== placeOrder — execution on filled orders ====================
+
+describe('CcxtBroker — placeOrder execution', () => {
+  it('populates execution when order fills immediately (market order)', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, {
+      'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT'),
+    })
+    ;(acc as any).exchange.createOrder = vi.fn().mockResolvedValue({
+      id: 'ord-42', status: 'closed', filled: 0.5, average: 1920.5,
+      datetime: '2026-03-17T12:00:00.000Z',
+    })
+
+    const contract = new Contract()
+    contract.aliceId = 'bybit-ETH/USDT:USDT'
+    const order = new Order()
+    order.action = 'SELL'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal(0.5)
+
+    const result = await acc.placeOrder(contract, order)
+    expect(result.success).toBe(true)
+    expect(result.execution).toBeDefined()
+    expect(result.execution!.price).toBe(1920.5)
+    expect(result.execution!.shares.toNumber()).toBe(0.5)
+    expect(result.execution!.side).toBe('SELL')
+  })
+
+  it('does not populate execution when order is pending (limit order)', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, {
+      'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT'),
+    })
+    ;(acc as any).exchange.createOrder = vi.fn().mockResolvedValue({
+      id: 'ord-43', status: 'open', filled: 0, average: undefined,
+    })
+
+    const contract = new Contract()
+    contract.aliceId = 'bybit-ETH/USDT:USDT'
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'LMT'
+    order.totalQuantity = new Decimal(1)
+    order.lmtPrice = 1800
+
+    const result = await acc.placeOrder(contract, order)
+    expect(result.success).toBe(true)
+    expect(result.execution).toBeUndefined()
+  })
+})
+
+// ==================== getOrder ====================
+
+describe('CcxtBroker — getOrder', () => {
+  it('fetches a specific order by ID using cached symbol', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    // Seed the orderSymbolCache
+    ;(acc as any).orderSymbolCache.set('ord-100', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOrder = vi.fn().mockResolvedValue({
+      id: 'ord-100', symbol: 'ETH/USDT:USDT', side: 'sell', amount: 0.5,
+      type: 'market', price: null, status: 'closed',
+    })
+
+    const result = await acc.getOrder('ord-100')
+    expect(result).not.toBeNull()
+    expect(result!.order.action).toBe('SELL')
+    expect(result!.orderState.status).toBe('Filled')
+  })
+
+  it('returns null when orderId not in symbol cache', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, {})
+
+    const result = await acc.getOrder('unknown-id')
+    expect(result).toBeNull()
+  })
+
+  it('returns null when fetchOrder throws', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT') })
+    ;(acc as any).orderSymbolCache.set('ord-404', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOrder = vi.fn().mockRejectedValue(new Error('Order not found'))
+
+    const result = await acc.getOrder('ord-404')
+    expect(result).toBeNull()
+  })
+})
+
 // ==================== getContractDetails ====================
 
 describe('CcxtBroker — getContractDetails', () => {

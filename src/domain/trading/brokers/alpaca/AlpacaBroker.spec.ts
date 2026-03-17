@@ -588,6 +588,41 @@ describe('AlpacaBroker — getOrders()', () => {
   })
 })
 
+// ==================== getOrder ====================
+
+describe('AlpacaBroker — getOrder()', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('fetches a specific order by ID', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    // Bypass init — inject mock client directly
+    ;(acc as any).client = {
+      getOrder: vi.fn().mockResolvedValue({
+        id: 'ord-200', symbol: 'AAPL', side: 'buy', qty: '10', notional: null,
+        type: 'market', limit_price: null, stop_price: null,
+        time_in_force: 'day', extended_hours: false,
+        status: 'filled', reject_reason: null,
+      }),
+    }
+    // No ensureInit in AlpacaBroker — client is enough
+
+    const result = await acc.getOrder('ord-200')
+    expect(result).not.toBeNull()
+    expect(result!.order.action).toBe('BUY')
+    expect(result!.orderState.status).toBe('Filled')
+  })
+
+  it('returns null when order not found', async () => {
+    const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
+    ;(acc as any).client = {
+      getOrder: vi.fn().mockRejectedValue(new Error('Order not found')),
+    }
+
+    const result = await acc.getOrder('nonexistent')
+    expect(result).toBeNull()
+  })
+})
+
 // ==================== getQuote ====================
 
 describe('AlpacaBroker — getQuote()', () => {

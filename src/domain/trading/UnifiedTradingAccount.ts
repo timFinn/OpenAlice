@@ -247,13 +247,10 @@ export class UnifiedTradingAccount {
       return { hash: '', updatedCount: 0, updates: [] }
     }
 
-    const brokerOrders = await this.broker.getOrders()
     const updates: OrderStatusUpdate[] = []
 
     for (const { orderId, symbol } of pendingOrders) {
-      const brokerOrder = brokerOrders.find(
-        (o) => String(o.order.orderId) === orderId || o.order.permId === parseInt(orderId, 10),
-      )
+      const brokerOrder = await this.broker.getOrder(orderId)
       if (!brokerOrder) continue
 
       const status = brokerOrder.orderState.status

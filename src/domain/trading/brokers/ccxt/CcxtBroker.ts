@@ -9,7 +9,7 @@
 import ccxt from 'ccxt'
 import Decimal from 'decimal.js'
 import type { Exchange, Order as CcxtOrder } from 'ccxt'
-import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import { Contract, ContractDescription, ContractDetails, Order, OrderState, Execution, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type {
   IBroker,
   AccountCapabilities,
@@ -298,12 +298,21 @@ export class CcxtBroker implements IBroker {
         this.orderSymbolCache.set(ccxtOrder.id, ccxtSymbol)
       }
 
-      const status = mapOrderStatus(ccxtOrder.status)
+      // Build execution if the order filled immediately (market orders, etc.)
+      const isFilled = ccxtOrder.status === 'closed'
+      let execution: Execution | undefined
+      if (isFilled && ccxtOrder.filled) {
+        execution = new Execution()
+        execution.shares = new Decimal(ccxtOrder.filled)
+        execution.price = ccxtOrder.average ?? 0
+        execution.side = side.toUpperCase()
+        execution.time = ccxtOrder.datetime ?? new Date().toISOString()
+      }
 
       return {
         success: true,
         orderId: ccxtOrder.id,
-        message: `Order ${ccxtOrder.id} ${status}`,
+        execution,
         orderState: makeOrderState(ccxtOrder.status),
       }
     } catch (err) {
@@ -475,30 +484,50 @@ export class CcxtBroker implements IBroker {
     const result: OpenOrder[] = []
 
     for (const o of allOrders) {
-      const market = this.markets[o.symbol]
-      if (!market) continue
-
-      if (o.id) {
-        this.orderSymbolCache.set(o.id, o.symbol)
-      }
-
-      const contract = marketToContract(market, this.exchangeName)
-
-      const order = new Order()
-      order.action = (o.side ?? 'buy').toUpperCase()
-      order.totalQuantity = new Decimal(o.amount ?? 0)
-      order.orderType = (o.type ?? 'market').toUpperCase()
-      if (o.price != null) order.lmtPrice = o.price
-      order.orderId = parseInt(o.id, 10) || 0
-
-      result.push({
-        contract,
-        order,
-        orderState: makeOrderState(o.status),
-      })
+      const converted = this.convertCcxtOrder(o)
+      if (converted) result.push(converted)
     }
 
     return result
+  }
+
+  async getOrder(orderId: string): Promise<OpenOrder | null> {
+    this.ensureInit()
+    this.ensureWritable()
+
+    const ccxtSymbol = this.orderSymbolCache.get(orderId)
+    if (!ccxtSymbol) return null
+
+    try {
+      const raw = await this.exchange.fetchOrder(orderId, ccxtSymbol)
+      return this.convertCcxtOrder(raw)
+    } catch {
+      return null
+    }
+  }
+
+  private convertCcxtOrder(o: CcxtOrder): OpenOrder | null {
+    const market = this.markets[o.symbol]
+    if (!market) return null
+
+    if (o.id) {
+      this.orderSymbolCache.set(o.id, o.symbol)
+    }
+
+    const contract = marketToContract(market, this.exchangeName)
+
+    const order = new Order()
+    order.action = (o.side ?? 'buy').toUpperCase()
+    order.totalQuantity = new Decimal(o.amount ?? 0)
+    order.orderType = (o.type ?? 'market').toUpperCase()
+    if (o.price != null) order.lmtPrice = o.price
+    order.orderId = parseInt(o.id, 10) || 0
+
+    return {
+      contract,
+      order,
+      orderState: makeOrderState(o.status),
+    }
   }
 
   async getQuote(contract: Contract): Promise<Quote> {
