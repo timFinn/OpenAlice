@@ -50,7 +50,6 @@ export class CcxtBroker implements IBroker {
 
   private exchange: Exchange
   private exchangeName: string
-  private defaultMarketType: 'spot' | 'swap'
   private initialized = false
   private readonly readOnly: boolean
 
@@ -62,7 +61,6 @@ export class CcxtBroker implements IBroker {
     this.provider = config.exchange  // use exchange name as provider (e.g. "bybit", "binance")
     this.id = config.id ?? `${config.exchange}-main`
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
-    this.defaultMarketType = config.defaultMarketType
     this.readOnly = !config.apiKey || !config.apiSecret
 
     const exchanges = ccxt as unknown as Record<string, new (opts: Record<string, unknown>) => Exchange>
@@ -198,10 +196,8 @@ export class CcxtBroker implements IBroker {
       matchedMarkets.push(market)
     }
 
-    // Sort: preferred market type first, then USDT > USD > USDC
-    const typeOrder = this.defaultMarketType === 'swap'
-      ? { swap: 0, future: 1, spot: 2, option: 3 }
-      : { spot: 0, swap: 1, future: 2, option: 3 }
+    // Sort: derivatives first (more common for trading), then stablecoin preference
+    const typeOrder: Record<string, number> = { swap: 0, future: 1, spot: 2, option: 3 }
     const quoteOrder: Record<string, number> = { USDT: 0, USD: 1, USDC: 2 }
 
     matchedMarkets.sort((a, b) => {

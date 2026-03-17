@@ -51,7 +51,6 @@ export function createPlatformFromConfig(config: PlatformConfig): IPlatform {
         exchange: config.exchange,
         sandbox: config.sandbox,
         demoTrading: config.demoTrading,
-        defaultMarketType: config.defaultMarketType,
         options: config.options,
       })
     case 'alpaca':

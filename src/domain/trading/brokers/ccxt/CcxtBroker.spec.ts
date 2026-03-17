@@ -77,7 +77,6 @@ function makeAccount(overrides?: Partial<{ apiKey: string; apiSecret: string }>)
     exchange: 'bybit',
     apiKey: overrides?.apiKey ?? 'k',
     apiSecret: overrides?.apiSecret ?? 's',
-    defaultMarketType: 'swap',
     sandbox: false,
   })
 }
@@ -91,13 +90,13 @@ function setInitialized(acc: CcxtBroker, markets: Record<string, any>) {
 
 describe('CcxtBroker — constructor', () => {
   it('throws for unknown exchange', () => {
-    expect(() => new CcxtBroker({ exchange: 'unknownxyz', apiKey: 'k', apiSecret: 's', defaultMarketType: 'spot', sandbox: false })).toThrow(
+    expect(() => new CcxtBroker({ exchange: 'unknownxyz', apiKey: 'k', apiSecret: 's', sandbox: false })).toThrow(
       'Unknown CCXT exchange',
     )
   })
 
   it('sets readOnly when no apiKey', () => {
-    const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', apiSecret: '', defaultMarketType: 'spot', sandbox: false })
+    const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', apiSecret: '', sandbox: false })
     expect((acc as any).readOnly).toBe(true)
   })
 
@@ -151,9 +150,9 @@ describe('CcxtBroker — searchContracts', () => {
     expect(before).toBe(3) // spot+swap USDT + spot USD (not inactive USDC)
   })
 
-  it('sorts swap before spot when defaultMarketType is swap', async () => {
+  it('sorts swap before spot by default', async () => {
     const results = await acc.searchContracts('BTC')
-    // USDT swap should come first (swap preference when defaultMarketType=swap)
+    // derivatives come first
     const first = results[0]
     expect((first.contract as any).secType ?? first.contract.symbol.includes(':') ? 'CRYPTO_PERP' : 'CRYPTO').toBeTruthy()
   })
@@ -626,7 +625,7 @@ describe('CcxtBroker — getAccount', () => {
   })
 
   it('throws when read-only', async () => {
-    const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', apiSecret: '', defaultMarketType: 'swap', sandbox: false })
+    const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', apiSecret: '', sandbox: false })
     ;(acc as any).initialized = true
 
     await expect(acc.getAccount()).rejects.toThrow('read-only')

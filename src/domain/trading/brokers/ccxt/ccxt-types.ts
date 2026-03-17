@@ -7,7 +7,6 @@ export interface CcxtBrokerConfig {
   password?: string
   sandbox: boolean
   demoTrading?: boolean
-  defaultMarketType: 'spot' | 'swap'
   options?: Record<string, unknown>
 }
 

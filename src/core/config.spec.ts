@@ -322,7 +322,6 @@ describe('loadTradingConfig', () => {
         apiSecret: 's1',
         sandbox: false,
         demoTrading: false,
-        defaultMarketType: 'spot',
       },
       guards: [],
     })

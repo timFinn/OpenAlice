@@ -161,10 +161,7 @@ function AccountsTable({ accounts, platforms, onSelect }: {
     const p = getPlatform(account.platformId)
     if (!p) return '—'
     if (p.type === 'ccxt') {
-      const parts = [p.exchange]
-      if (p.defaultMarketType === 'swap') parts.push('swap')
-      else parts.push('spot')
-      return parts.join(' \u00b7 ')
+      return p.exchange
     }
     return p.paper ? 'paper' : 'live'
   }
@@ -268,7 +265,7 @@ function CreateWizard({ existingAccountIds, onSave, onClose }: {
     try {
       const platformId = `${finalId}-platform`
       const platform: PlatformConfig = type === 'ccxt'
-        ? { id: platformId, type: 'ccxt', exchange, sandbox, demoTrading, defaultMarketType: marketType }
+        ? { id: platformId, type: 'ccxt', exchange, sandbox, demoTrading }
         : { id: platformId, type: 'alpaca', paper }
       const account: AccountConfig = {
         id: finalId, platformId,
@@ -549,12 +546,6 @@ function CcxtConnectionFields({ draft, onPatch }: {
     <>
       <Field label="Exchange">
         <input className={inputClass} value={draft.exchange} onChange={(e) => onPatch('exchange', e.target.value.trim())} placeholder="binance" />
-      </Field>
-      <Field label="Market Type">
-        <select className={inputClass} value={draft.defaultMarketType} onChange={(e) => onPatch('defaultMarketType', e.target.value)}>
-          <option value="swap">Perpetual Swap</option>
-          <option value="spot">Spot</option>
-        </select>
       </Field>
       <div className="space-y-2">
         <label className="flex items-center gap-2.5 cursor-pointer">

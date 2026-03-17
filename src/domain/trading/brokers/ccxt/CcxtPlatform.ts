@@ -7,7 +7,6 @@ export interface CcxtPlatformConfig {
   exchange: string
   sandbox: boolean
   demoTrading?: boolean
-  defaultMarketType: 'spot' | 'swap'
   options?: Record<string, unknown>
 }
 
@@ -23,7 +22,7 @@ export class CcxtPlatform implements IPlatform {
     this.id = config.id
     this.providerType = config.exchange
     const exchangeLabel = config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)
-    this.label = config.label ?? `${exchangeLabel} ${config.defaultMarketType} (${config.sandbox ? 'testnet' : 'live'})`
+    this.label = config.label ?? `${exchangeLabel} (${config.sandbox ? 'testnet' : 'live'})`
   }
 
   createAccount(credentials: PlatformCredentials): CcxtBroker {
@@ -36,7 +35,6 @@ export class CcxtPlatform implements IPlatform {
       password: credentials.password,
       sandbox: this.config.sandbox,
       demoTrading: this.config.demoTrading,
-      defaultMarketType: this.config.defaultMarketType,
       options: this.config.options,
     })
   }

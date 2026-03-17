@@ -60,14 +60,13 @@ const cryptoSchema = z.object({
       password: z.string().optional(),
       sandbox: z.boolean().default(false),
       demoTrading: z.boolean().default(false),
-      defaultMarketType: z.enum(['spot', 'swap']).default('swap'),
       options: z.record(z.string(), z.unknown()).optional(),
-    }),
+    }).passthrough(),
     z.object({
       type: z.literal('none'),
     }),
   ]).default({
-    type: 'ccxt', exchange: 'binance', sandbox: false, demoTrading: true, defaultMarketType: 'swap',
+    type: 'ccxt', exchange: 'binance', sandbox: false, demoTrading: true,
   }),
   guards: z.array(z.object({
     type: z.string(),
@@ -217,9 +216,8 @@ const ccxtPlatformSchema = z.object({
   exchange: z.string(),
   sandbox: z.boolean().default(false),
   demoTrading: z.boolean().default(false),
-  defaultMarketType: z.enum(['spot', 'swap']).default('swap'),
   options: z.record(z.string(), z.unknown()).optional(),
-})
+}).passthrough()
 
 const alpacaPlatformSchema = z.object({
   id: z.string(),
@@ -408,7 +406,6 @@ async function migrateLegacyTradingConfig(): Promise<{
       exchange: p.exchange,
       sandbox: p.sandbox,
       demoTrading: p.demoTrading,
-      defaultMarketType: p.defaultMarketType,
       options: p.options,
     })
     accounts.push({

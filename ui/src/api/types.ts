@@ -221,7 +221,6 @@ export interface CcxtPlatformConfig {
   exchange: string
   sandbox: boolean
   demoTrading: boolean
-  defaultMarketType: 'spot' | 'swap'
 }
 
 export interface AlpacaPlatformConfig {
