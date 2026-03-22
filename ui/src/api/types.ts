@@ -298,6 +298,7 @@ export interface IbkrAccountConfig {
   port: number
   clientId: number
   accountId?: string
+  paper: boolean
   guards: GuardEntry[]
 }
 

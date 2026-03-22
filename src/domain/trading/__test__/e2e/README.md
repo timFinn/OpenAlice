@@ -1,6 +1,6 @@
 # Trading E2E Tests
 
-End-to-end tests that run against real broker APIs (Alpaca paper, Bybit demo) and MockBroker.
+End-to-end tests that run against real broker APIs (Alpaca paper, Bybit demo, IBKR paper) and MockBroker.
 
 ## Running
 
@@ -14,8 +14,8 @@ Tests run sequentially (`fileParallelism: false`) because broker APIs are shared
 
 | Pattern | Level | Example |
 |---------|-------|---------|
-| `{broker}.e2e.spec.ts` | Broker API | `alpaca-paper` — calls `broker.placeOrder()` directly |
-| `uta-{broker}.e2e.spec.ts` | UTA (Trading-as-Git) | `uta-alpaca` — uses `stagePlaceOrder → commit → push` |
+| `{broker}.e2e.spec.ts` | Broker API | `alpaca-paper`, `ibkr-paper` — calls `broker.placeOrder()` directly |
+| `uta-{broker}.e2e.spec.ts` | UTA (Trading-as-Git) | `uta-alpaca`, `uta-ibkr` — uses `stagePlaceOrder → commit → push` |
 | `uta-lifecycle.e2e.spec.ts` | UTA + MockBroker | Pure in-memory, no external deps |
 
 ## Precondition Pattern
@@ -52,7 +52,7 @@ it('places order', async ({ skip }) => {
 ## Market Hours
 
 - **Crypto (CCXT)**: 24/7, no market hours check needed
-- **Equities (Alpaca)**: Split into two `describe` groups:
+- **Equities (Alpaca, IBKR)**: Split into two `describe` groups:
   - **Connectivity** — runs any time (getAccount, getPositions, searchContracts, getMarketClock)
   - **Trading** — requires market open (getQuote, placeOrder, closePosition)
 
@@ -62,8 +62,19 @@ Check `broker.getMarketClock().isOpen` in `beforeAll`, skip trading group via `b
 
 `setup.ts` provides a lazy singleton `getTestAccounts()` that:
 1. Reads `accounts.json`
-2. Filters for safe accounts only (Alpaca `paper: true`, CCXT `sandbox` or `demoTrading`)
-3. Skips accounts without API keys
+2. Filters for paper/sandbox accounts only via `isPaper()`:
+   - Alpaca: `paper === true`
+   - CCXT: `sandbox || demoTrading`
+   - IBKR: `paper === true`
+3. Checks credentials (API key for REST brokers; TCP reachability for local-process brokers like IBKR)
 4. Calls `broker.init()` — if init fails, account is skipped with a warning
 
 Brokers are shared across test files via module-level caching.
+
+## IBKR-Specific
+
+IBKR tests require TWS or IB Gateway running with paper trading enabled. Unlike REST-based brokers, IBKR connects via a local TCP socket — no API key is needed.
+
+If TWS is not running, IBKR tests are automatically skipped (setup checks TCP reachability before attempting connection).
+
+Default connection: `127.0.0.1:7497` (TWS paper). Override via `accounts.json`.

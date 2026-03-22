@@ -244,6 +244,7 @@ const ibkrAccountSchema = z.object({
   port: z.number().int().default(7497),
   clientId: z.number().int().default(0),
   accountId: z.string().optional(),
+  paper: z.boolean().default(true),
   guards: z.array(guardConfigSchema).default([]),
 })
 
