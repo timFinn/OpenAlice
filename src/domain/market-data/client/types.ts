@@ -22,6 +22,21 @@ export interface EquityClientLike {
   getActive(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
 }
 
+export interface EconomyClientLike {
+  getCPI(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getUnemployment(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getInterestRates(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getGdpReal(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getGdpForecast(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getInflationExpectations(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getFomcDocuments(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  fredSearch(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  fredSeries(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getUniversityOfMichigan(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getNonfarmPayrolls(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getCalendar(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+}
+
 export interface CryptoClientLike {
   search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
   getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>

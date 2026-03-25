@@ -16,12 +16,13 @@ import type { BrainExportState } from './domain/brain/index.js'
 import { createBrowserTools } from './tool/browser.js'
 import { SymbolIndex } from './domain/market-data/equity/index.js'
 import { createEquityTools } from './tool/equity.js'
-import { getSDKExecutor, buildRouteMap, SDKEquityClient, SDKCryptoClient, SDKCurrencyClient } from './domain/market-data/client/typebb/index.js'
-import type { EquityClientLike, CryptoClientLike, CurrencyClientLike } from './domain/market-data/client/types.js'
+import { getSDKExecutor, buildRouteMap, SDKEquityClient, SDKCryptoClient, SDKCurrencyClient, SDKEconomyClient } from './domain/market-data/client/typebb/index.js'
+import type { EquityClientLike, CryptoClientLike, CurrencyClientLike, EconomyClientLike } from './domain/market-data/client/types.js'
 import { buildSDKCredentials } from './domain/market-data/credential-map.js'
 import { OpenBBEquityClient } from './domain/market-data/client/openbb-api/equity-client.js'
 import { OpenBBCryptoClient } from './domain/market-data/client/openbb-api/crypto-client.js'
 import { OpenBBCurrencyClient } from './domain/market-data/client/openbb-api/currency-client.js'
+import { OpenBBEconomyClient } from './domain/market-data/client/openbb-api/economy-client.js'
 import { OpenBBServerPlugin } from './server/opentypebb.js'
 import { createMarketSearchTools } from './tool/market.js'
 import { createAnalysisTools } from './tool/analysis.js'
@@ -30,6 +31,7 @@ import { createNewsSentimentTools } from './tool/news-sentiment.js'
 import { createScreenerTools } from './tool/screener.js'
 import { createVolatilityTools } from './tool/volatility.js'
 import { createFearGreedTools } from './tool/fear-greed.js'
+import { createEconomyTools } from './tool/economy.js'
 import { SessionStore } from './core/session.js'
 import { ConnectorCenter } from './core/connector-center.js'
 import { ToolCenter } from './core/tool-center.js'
@@ -154,6 +156,7 @@ async function main() {
   let equityClient: EquityClientLike
   let cryptoClient: CryptoClientLike
   let currencyClient: CurrencyClientLike
+  let economyClient: EconomyClientLike
 
   if (config.marketData.backend === 'openbb-api') {
     const url = config.marketData.apiUrl
@@ -161,6 +164,7 @@ async function main() {
     equityClient = new OpenBBEquityClient(url, providers.equity, keys)
     cryptoClient = new OpenBBCryptoClient(url, providers.crypto, keys)
     currencyClient = new OpenBBCurrencyClient(url, providers.currency, keys)
+    economyClient = new OpenBBEconomyClient(url, undefined, keys)
   } else {
     const executor = getSDKExecutor()
     const routeMap = buildRouteMap()
@@ -168,6 +172,7 @@ async function main() {
     equityClient = new SDKEquityClient(executor, 'equity', providers.equity, credentials, routeMap)
     cryptoClient = new SDKCryptoClient(executor, 'crypto', providers.crypto, credentials, routeMap)
     currencyClient = new SDKCurrencyClient(executor, 'currency', providers.currency, credentials, routeMap)
+    economyClient = new SDKEconomyClient(executor, 'economy', undefined, credentials, routeMap)
   }
 
   // OpenBB API server is started later via optionalPlugins
@@ -201,6 +206,7 @@ async function main() {
   toolCenter.register(createScreenerTools(equityClient, symbolIndex), 'screener')
   toolCenter.register(createVolatilityTools(equityClient), 'volatility')
   toolCenter.register(createFearGreedTools(equityClient), 'fear-greed')
+  toolCenter.register(createEconomyTools(economyClient), 'economy')
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered`)
 
