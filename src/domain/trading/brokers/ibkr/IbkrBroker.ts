@@ -37,7 +37,7 @@ import {
 import '../../contract-ext.js'
 import { RequestBridge } from './request-bridge.js'
 import { resolveSymbol } from './ibkr-contracts.js'
-import type { IbkrBrokerConfig, AccountDownloadResult } from './ibkr-types.js'
+import type { IbkrBrokerConfig } from './ibkr-types.js'
 
 export class IbkrBroker implements IBroker {
   // ---- Self-registration ----
@@ -110,9 +110,10 @@ export class IbkrBroker implements IBroker {
       throw new BrokerError('CONFIG', 'No account detected from TWS/Gateway. Set accountId in config for multi-account setups.')
     }
 
-    // Verify connection by fetching account data
+    // Start persistent account subscription and wait for first download
     try {
-      await this.getAccount()
+      this.bridge.startAccountSubscription(this.accountId)
+      await this.bridge.waitForAccountReady()
       console.log(`IbkrBroker[${this.id}]: connected (account=${this.accountId}, host=${host}:${port}, clientId=${clientId})`)
     } catch (err) {
       throw BrokerError.from(err, 'NETWORK')
@@ -120,6 +121,7 @@ export class IbkrBroker implements IBroker {
   }
 
   async close(): Promise<void> {
+    this.bridge.stopAccountSubscription()
     this.client.disconnect()
   }
 
@@ -259,7 +261,8 @@ export class IbkrBroker implements IBroker {
    * will be stale even though Blue Ocean ATS prices may be moving.
    */
   async getAccount(): Promise<AccountInfo> {
-    const download = await this.downloadAccount()
+    const download = this.bridge.getAccountCache()
+    if (!download) throw new BrokerError('NETWORK', 'Account data not yet available')
 
     const totalCashValue = parseFloat(download.values.get('TotalCashValue') ?? '0')
     let totalMarketValue = 0
@@ -305,7 +308,8 @@ export class IbkrBroker implements IBroker {
    * snapshot mode and can see overnight session data.
    */
   async getPositions(): Promise<Position[]> {
-    const download = await this.downloadAccount()
+    const download = this.bridge.getAccountCache()
+    if (!download) throw new BrokerError('NETWORK', 'Account data not yet available')
     return download.positions
   }
 
@@ -435,9 +439,4 @@ export class IbkrBroker implements IBroker {
     return c
   }
 
-  // ==================== Internal ====================
-
-  private downloadAccount(): Promise<AccountDownloadResult> {
-    return this.bridge.requestAccountDownload(this.accountId!)
-  }
 }
