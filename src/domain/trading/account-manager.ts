@@ -1,13 +1,21 @@
 /**
- * AccountManager — multi-UTA registry and aggregation
+ * AccountManager — UTA lifecycle management, registry, and aggregation.
  *
- * Holds all UnifiedTradingAccount instances, provides cross-account operations
- * like aggregated equity, global contract search, and source routing.
+ * Owns the full account lifecycle: create → register → reconnect → remove → close.
+ * Also provides cross-account operations (aggregated equity, contract search).
  */
 
 import type { Contract, ContractDescription, ContractDetails } from '@traderalice/ibkr'
 import type { AccountCapabilities, BrokerHealth, BrokerHealthInfo } from './brokers/types.js'
-import type { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+import { CcxtBroker } from './brokers/ccxt/CcxtBroker.js'
+import { createCcxtProviderTools } from './brokers/ccxt/ccxt-tools.js'
+import { createBroker } from './brokers/factory.js'
+import { UnifiedTradingAccount } from './UnifiedTradingAccount.js'
+import { loadGitState, createGitPersister } from './git-persistence.js'
+import { readAccountsConfig, type AccountConfig } from '../../core/config.js'
+import type { EventLog } from '../../core/event-log.js'
+import type { ToolCenter } from '../../core/tool-center.js'
+import type { ReconnectResult } from '../../core/types.js'
 import './contract-ext.js'
 
 // ==================== Account summary ====================
@@ -15,7 +23,6 @@ import './contract-ext.js'
 export interface AccountSummary {
   id: string
   label: string
-  platformId?: string
   capabilities: AccountCapabilities
   health: BrokerHealthInfo
 }
@@ -46,10 +53,109 @@ export interface ContractSearchResult {
 
 // ==================== AccountManager ====================
 
+export interface SnapshotHooks {
+  onPostPush?: (accountId: string) => void | Promise<void>
+  onPostReject?: (accountId: string) => void | Promise<void>
+}
+
 export class AccountManager {
   private entries = new Map<string, UnifiedTradingAccount>()
+  private reconnecting = new Set<string>()
 
-  // ---- Registration ----
+  private eventLog?: EventLog
+  private toolCenter?: ToolCenter
+  private _snapshotHooks?: SnapshotHooks
+
+  constructor(deps?: { eventLog: EventLog; toolCenter: ToolCenter }) {
+    this.eventLog = deps?.eventLog
+    this.toolCenter = deps?.toolCenter
+  }
+
+  setSnapshotHooks(hooks: SnapshotHooks): void {
+    this._snapshotHooks = hooks
+  }
+
+  // ==================== Lifecycle ====================
+
+  /** Create a UTA from account config, register it, and start async broker connection. */
+  async initAccount(accCfg: AccountConfig): Promise<UnifiedTradingAccount> {
+    const broker = createBroker(accCfg)
+    const savedState = await loadGitState(accCfg.id)
+    const uta = new UnifiedTradingAccount(broker, {
+      guards: accCfg.guards,
+      savedState,
+      onCommit: createGitPersister(accCfg.id),
+      onHealthChange: (accountId, health) => {
+        this.eventLog?.append('account.health', { accountId, ...health })
+      },
+      onPostPush: this._snapshotHooks?.onPostPush,
+      onPostReject: this._snapshotHooks?.onPostReject,
+    })
+    this.add(uta)
+    return uta
+  }
+
+  /** Reconnect an account: close old → re-read config → create new → verify connection. */
+  async reconnectAccount(accountId: string): Promise<ReconnectResult> {
+    if (this.reconnecting.has(accountId)) {
+      return { success: false, error: 'Reconnect already in progress' }
+    }
+    this.reconnecting.add(accountId)
+    try {
+      // Re-read config to pick up credential/guard changes
+      const freshAccounts = await readAccountsConfig()
+
+      // Close old account
+      await this.removeAccount(accountId)
+
+      const accCfg = freshAccounts.find((a) => a.id === accountId)
+      if (!accCfg) {
+        return { success: true, message: `Account "${accountId}" not found in config (removed or disabled)` }
+      }
+
+      const uta = await this.initAccount(accCfg)
+
+      // Wait for broker.init() + broker.getAccount() to verify the connection
+      await uta.waitForConnect()
+
+      // Re-register CCXT-specific tools if this is a CCXT account
+      if (accCfg.type === 'ccxt') {
+        this.toolCenter?.register(
+          createCcxtProviderTools(this),
+          'trading-ccxt',
+        )
+      }
+
+      const label = uta.label ?? accountId
+      console.log(`reconnect: ${label} online`)
+      return { success: true, message: `${label} reconnected` }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`reconnect: ${accountId} failed:`, msg)
+      return { success: false, error: msg }
+    } finally {
+      this.reconnecting.delete(accountId)
+    }
+  }
+
+  /** Close and deregister an account. No-op if account doesn't exist. */
+  async removeAccount(accountId: string): Promise<void> {
+    const uta = this.entries.get(accountId)
+    if (!uta) return
+    this.entries.delete(accountId)
+    try { await uta.close() } catch { /* best effort */ }
+  }
+
+  /** Register CCXT provider tools if any CCXT accounts are present. */
+  registerCcxtToolsIfNeeded(): void {
+    const hasCcxt = this.resolve().some((uta) => uta.broker instanceof CcxtBroker)
+    if (hasCcxt) {
+      this.toolCenter?.register(createCcxtProviderTools(this), 'trading-ccxt')
+      console.log('ccxt: provider tools registered')
+    }
+  }
+
+  // ==================== Registration ====================
 
   add(uta: UnifiedTradingAccount): void {
     if (this.entries.has(uta.id)) {
@@ -62,7 +168,7 @@ export class AccountManager {
     this.entries.delete(id)
   }
 
-  // ---- Lookups ----
+  // ==================== Lookups ====================
 
   get(id: string): UnifiedTradingAccount | undefined {
     return this.entries.get(id)
@@ -72,7 +178,6 @@ export class AccountManager {
     return Array.from(this.entries.values()).map((uta) => ({
       id: uta.id,
       label: uta.label,
-      platformId: uta.platformId,
       capabilities: uta.getCapabilities(),
       health: uta.getHealthInfo(),
     }))
@@ -86,13 +191,8 @@ export class AccountManager {
     return this.entries.size
   }
 
-  // ---- Source routing ----
+  // ==================== Source routing ====================
 
-  /**
-   * Resolve a source string to matching UTAs.
-   * - If omitted, returns all.
-   * - Matches by account id.
-   */
   resolve(source?: string): UnifiedTradingAccount[] {
     if (!source) {
       return Array.from(this.entries.values())
@@ -102,9 +202,6 @@ export class AccountManager {
     return []
   }
 
-  /**
-   * Resolve to exactly one UTA. Throws if zero or multiple matches.
-   */
   resolveOne(source: string): UnifiedTradingAccount {
     const results = this.resolve(source)
     if (results.length === 0) {
@@ -118,25 +215,19 @@ export class AccountManager {
     return results[0]
   }
 
-  // ---- Cross-account aggregation ----
-
-  /** Throttle: only warn once per account per 5 minutes */
-  private equityWarnedAt = new Map<string, number>()
-  private static readonly EQUITY_WARN_INTERVAL_MS = 5 * 60_000
+  // ==================== Cross-account aggregation ====================
 
   async getAggregatedEquity(): Promise<AggregatedEquity> {
     const results = await Promise.all(
       Array.from(this.entries.values()).map(async (uta) => {
+        if (uta.health !== 'healthy') {
+          uta.nudgeRecovery()
+          return { id: uta.id, label: uta.label, health: uta.health, info: null }
+        }
         try {
           const info = await uta.getAccount()
           return { id: uta.id, label: uta.label, health: uta.health, info }
-        } catch (err) {
-          const now = Date.now()
-          const lastWarned = this.equityWarnedAt.get(uta.id) ?? 0
-          if (now - lastWarned > AccountManager.EQUITY_WARN_INTERVAL_MS) {
-            console.warn(`getAggregatedEquity: ${uta.id} failed, skipping:`, err)
-            this.equityWarnedAt.set(uta.id, now)
-          }
+        } catch {
           return { id: uta.id, label: uta.label, health: uta.health, info: null }
         }
       }),
@@ -168,7 +259,7 @@ export class AccountManager {
     return { totalEquity, totalCash, totalUnrealizedPnL, totalRealizedPnL, accounts }
   }
 
-  // ---- Cross-account contract search ----
+  // ==================== Cross-account contract search ====================
 
   async searchContracts(
     pattern: string,
@@ -180,8 +271,16 @@ export class AccountManager {
 
     const results = await Promise.all(
       targets.map(async (uta) => {
-        const descriptions = await uta.searchContracts(pattern)
-        return { accountId: uta.id, results: descriptions }
+        if (uta.health !== 'healthy') {
+          uta.nudgeRecovery()
+          return { accountId: uta.id, results: [] as ContractDescription[] }
+        }
+        try {
+          const descriptions = await uta.searchContracts(pattern)
+          return { accountId: uta.id, results: descriptions }
+        } catch {
+          return { accountId: uta.id, results: [] as ContractDescription[] }
+        }
       }),
     )
 
@@ -197,7 +296,7 @@ export class AccountManager {
     return uta.getContractDetails(query)
   }
 
-  // ---- Lifecycle ----
+  // ==================== Cleanup ====================
 
   async closeAll(): Promise<void> {
     await Promise.allSettled(

@@ -193,7 +193,7 @@ Uses the trading commit log as the data source.`,
           const ops = c.operations as Array<Record<string, unknown>> | undefined
           if (ops) {
             for (const op of ops) {
-              if (op.symbol) symbols.push(op.symbol as string)
+              if (op.symbol) symbols.add(op.symbol as string)
             }
           }
         }

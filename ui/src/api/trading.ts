@@ -1,5 +1,5 @@
 import { fetchJson } from './client'
-import type { TradingAccount, AccountInfo, Position, WalletCommitLog, ReconnectResult, PlatformConfig, AccountConfig, WalletStatus, WalletPushResult, WalletRejectResult } from './types'
+import type { TradingAccount, AccountSummary, AccountInfo, Position, WalletCommitLog, ReconnectResult, AccountConfig, WalletStatus, WalletPushResult, WalletRejectResult, TestConnectionResult, BrokerTypeInfo, UTASnapshotSummary, EquityCurvePoint } from './types'
 
 // ==================== Unified Trading API ====================
 
@@ -7,6 +7,10 @@ export const tradingApi = {
   // ==================== Accounts ====================
 
   async listAccounts(): Promise<{ accounts: TradingAccount[] }> {
+    return fetchJson('/api/trading/accounts')
+  },
+
+  async listAccountSummaries(): Promise<{ accounts: AccountSummary[] }> {
     return fetchJson('/api/trading/accounts')
   },
 
@@ -75,31 +79,16 @@ export const tradingApi = {
     return res.json()
   },
 
+  // ==================== Broker Types ====================
+
+  async getBrokerTypes(): Promise<{ brokerTypes: BrokerTypeInfo[] }> {
+    return fetchJson('/api/trading/config/broker-types')
+  },
+
   // ==================== Trading Config CRUD ====================
 
-  async loadTradingConfig(): Promise<{ platforms: PlatformConfig[]; accounts: AccountConfig[] }> {
+  async loadTradingConfig(): Promise<{ accounts: AccountConfig[] }> {
     return fetchJson('/api/trading/config')
-  },
-
-  async upsertPlatform(platform: PlatformConfig): Promise<PlatformConfig> {
-    const res = await fetch(`/api/trading/config/platforms/${platform.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(platform),
-    })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body.error || `Failed to save platform (${res.status})`)
-    }
-    return res.json()
-  },
-
-  async deletePlatform(id: string): Promise<void> {
-    const res = await fetch(`/api/trading/config/platforms/${id}`, { method: 'DELETE' })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new Error(body.error || `Failed to delete platform (${res.status})`)
-    }
   },
 
   async upsertAccount(account: AccountConfig): Promise<AccountConfig> {
@@ -121,5 +110,34 @@ export const tradingApi = {
       const body = await res.json().catch(() => ({}))
       throw new Error(body.error || `Failed to delete account (${res.status})`)
     }
+  },
+
+  // ==================== Snapshots ====================
+
+  async snapshots(accountId: string, opts?: { limit?: number; startTime?: string; endTime?: string }): Promise<{ snapshots: UTASnapshotSummary[] }> {
+    const params = new URLSearchParams()
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.startTime) params.set('startTime', opts.startTime)
+    if (opts?.endTime) params.set('endTime', opts.endTime)
+    return fetchJson(`/api/trading/accounts/${accountId}/snapshots?${params}`)
+  },
+
+  async equityCurve(opts?: { startTime?: string; endTime?: string; limit?: number }): Promise<{ points: EquityCurvePoint[] }> {
+    const params = new URLSearchParams()
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.startTime) params.set('startTime', opts.startTime)
+    if (opts?.endTime) params.set('endTime', opts.endTime)
+    return fetchJson(`/api/trading/snapshots/equity-curve?${params}`)
+  },
+
+  // ==================== Connection Testing ====================
+
+  async testConnection(account: AccountConfig): Promise<TestConnectionResult> {
+    const res = await fetch('/api/trading/config/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(account),
+    })
+    return res.json()
   },
 }

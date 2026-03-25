@@ -95,11 +95,6 @@ describe('CcxtBroker — constructor', () => {
     )
   })
 
-  it('sets readOnly when no apiKey', () => {
-    const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', apiSecret: '', sandbox: false })
-    expect((acc as any).readOnly).toBe(true)
-  })
-
   it('stores exchange name in meta', () => {
     const acc = makeAccount()
     expect(acc.meta).toEqual({ exchange: 'bybit' })
@@ -169,21 +164,24 @@ describe('CcxtBroker — cancelOrder cache', () => {
     expect((acc as any).exchange.cancelOrder).toHaveBeenCalledWith('order-not-cached', undefined)
   })
 
-  it('returns false when exchange.cancelOrder throws (cache miss causes undefined symbol)', async () => {
+  it('returns PlaceOrderResult with error when exchange.cancelOrder throws', async () => {
     const acc = makeAccount()
     setInitialized(acc, {})
     ;(acc as any).exchange.cancelOrder = vi.fn().mockRejectedValue(new Error('symbol required'))
     const result = await acc.cancelOrder('order-not-cached')
-    expect(result).toBe(false)
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('symbol required')
   })
 
-  it('calls exchange.cancelOrder with correct symbol when orderId is cached', async () => {
+  it('returns PlaceOrderResult with Cancelled status when orderId is cached', async () => {
     const acc = makeAccount()
     setInitialized(acc, {})
     ;(acc as any).orderSymbolCache.set('order-123', 'BTC/USDT:USDT')
     ;(acc as any).exchange.cancelOrder = vi.fn().mockResolvedValue({})
     const result = await acc.cancelOrder('order-123')
-    expect(result).toBe(true)
+    expect(result.success).toBe(true)
+    expect(result.orderId).toBe('order-123')
+    expect(result.orderState?.status).toBe('Cancelled')
     expect((acc as any).exchange.cancelOrder).toHaveBeenCalledWith('order-123', 'BTC/USDT:USDT')
   })
 })
@@ -611,12 +609,15 @@ describe('CcxtBroker — getAccount', () => {
       free: { USDT: 8000 },
       used: { USDT: 2000 },
     })
+    // Positions must include contracts/contractSize/markPrice so the broker
+    // can reconstruct netLiquidation from fresh position market values.
     ;(acc as any).exchange.fetchPositions = vi.fn().mockResolvedValue([
-      { unrealizedPnl: 500, realizedPnl: 100 },
-      { unrealizedPnl: -200, realizedPnl: 50 },
+      { contracts: 1, contractSize: 1, markPrice: 1500, unrealizedPnl: 500, realizedPnl: 100, side: 'long' },
+      { contracts: 1, contractSize: 1, markPrice: 500, unrealizedPnl: -200, realizedPnl: 50, side: 'long' },
     ])
 
     const info = await acc.getAccount()
+    // netLiq = free (8000) + position market values (1500 + 500 = 2000) = 10000
     expect(info.netLiquidation).toBe(10000)
     expect(info.totalCashValue).toBe(8000)
     expect(info.initMarginReq).toBe(2000)
@@ -624,11 +625,10 @@ describe('CcxtBroker — getAccount', () => {
     expect(info.realizedPnL).toBe(150)
   })
 
-  it('throws when read-only', async () => {
+  it('throws BrokerError when no API credentials', async () => {
     const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', apiSecret: '', sandbox: false })
-    ;(acc as any).initialized = true
 
-    await expect(acc.getAccount()).rejects.toThrow('read-only')
+    await expect(acc.init()).rejects.toThrow('No API credentials configured')
   })
 })
 
@@ -662,7 +662,6 @@ describe('CcxtBroker — getPositions', () => {
     expect(positions[0].side).toBe('long')
     expect(positions[0].avgCost).toBe(58000)
     expect(positions[0].marketPrice).toBe(60000)
-    expect(positions[0].leverage).toBe(5)
   })
 
   it('skips zero-size positions', async () => {

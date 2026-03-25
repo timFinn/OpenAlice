@@ -8,6 +8,7 @@
  * fillPendingOrder() to trigger fills in tests).
  */
 
+import { z } from 'zod'
 import Decimal from 'decimal.js'
 import { Contract, ContractDescription, ContractDetails, Order, OrderState, UNSET_DECIMAL, UNSET_DOUBLE } from '@traderalice/ibkr'
 import type {
@@ -92,7 +93,6 @@ export function makePosition(overrides: Partial<Position> = {}): Position {
     marketValue: 1600,
     unrealizedPnL: 100,
     realizedPnL: 0,
-    leverage: 1,
     ...overrides,
   }
 }
@@ -123,6 +123,17 @@ export function makePlaceOrderResult(overrides: Partial<PlaceOrderResult> = {}):
 // ==================== MockBroker ====================
 
 export class MockBroker implements IBroker {
+  // ---- Self-registration ----
+
+  static configSchema = z.object({})
+  static configFields: import('../types.js').BrokerConfigField[] = []
+
+  static fromConfig(config: { id: string; label?: string; brokerConfig: Record<string, unknown> }): MockBroker {
+    return new MockBroker({ id: config.id, label: config.label })
+  }
+
+  // ---- Instance ----
+
   readonly id: string
   readonly label: string
 
@@ -251,20 +262,20 @@ export class MockBroker implements IBroker {
     return { success: true, orderId, orderState }
   }
 
-  async modifyOrder(orderId: string, changes: Order): Promise<PlaceOrderResult> {
+  async modifyOrder(orderId: string, changes: Partial<Order>): Promise<PlaceOrderResult> {
     this._record('modifyOrder', [orderId, changes])
     const internal = this._orders.get(orderId)
     if (!internal || internal.status !== 'Submitted') {
       return { success: false, error: `Order ${orderId} not found or not pending` }
     }
 
-    if (!changes.totalQuantity.equals(UNSET_DECIMAL)) {
+    if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) {
       internal.order.totalQuantity = changes.totalQuantity
     }
-    if (changes.lmtPrice !== UNSET_DOUBLE) {
+    if (changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE) {
       internal.order.lmtPrice = changes.lmtPrice
     }
-    if (changes.auxPrice !== UNSET_DOUBLE) {
+    if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) {
       internal.order.auxPrice = changes.auxPrice
     }
 
@@ -273,12 +284,16 @@ export class MockBroker implements IBroker {
     return { success: true, orderId, orderState }
   }
 
-  async cancelOrder(orderId: string): Promise<boolean> {
+  async cancelOrder(orderId: string): Promise<PlaceOrderResult> {
     this._record('cancelOrder', [orderId])
     const internal = this._orders.get(orderId)
-    if (!internal || internal.status !== 'Submitted') return false
+    if (!internal || internal.status !== 'Submitted') {
+      return { success: false, error: `Order ${orderId} not found or not pending` }
+    }
     internal.status = 'Cancelled'
-    return true
+    const orderState = new OrderState()
+    orderState.status = 'Cancelled'
+    return { success: true, orderId, orderState }
   }
 
   async closePosition(contract: Contract, quantity?: Decimal): Promise<PlaceOrderResult> {
@@ -381,6 +396,19 @@ export class MockBroker implements IBroker {
 
   getCapabilities(): AccountCapabilities {
     return DEFAULT_CAPABILITIES
+  }
+
+  // ==================== Contract identity ====================
+
+  getNativeKey(contract: Contract): string {
+    return contract.symbol
+  }
+
+  resolveNativeKey(nativeKey: string): Contract {
+    const c = new Contract()
+    c.symbol = nativeKey
+    c.secType = 'STK'
+    return c
   }
 
   // ==================== Test helpers ====================

@@ -37,6 +37,8 @@ export interface OperationResult {
   status: OperationStatus
   execution?: Execution
   orderState?: OrderState
+  filledQty?: number
+  filledPrice?: number
   error?: string
   raw?: unknown
 }
@@ -98,6 +100,7 @@ export interface RejectResult {
 export interface GitStatus {
   staged: Operation[]
   pendingMessage: string | null
+  pendingHash: CommitHash | null
   head: CommitHash | null
   commitCount: number
 }

@@ -52,6 +52,8 @@ export type {
   NewsCollectorFeed,
   ToolCallRecord,
   LoginMethod,
+  UTASnapshotSummary,
+  EquityCurvePoint,
 } from './types'
 export type { EventQueryResult } from './events'
 export type { ToolCallQueryResult } from './agentStatus'

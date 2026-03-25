@@ -1,7 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
-import { api, type Position, type WalletCommitLog } from '../api'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { api, type Position, type WalletCommitLog, type EquityCurvePoint, type UTASnapshotSummary } from '../api'
+import { useAutoSave } from '../hooks/useAutoSave'
+import { useAccountHealth } from '../hooks/useAccountHealth'
 import { PageHeader } from '../components/PageHeader'
 import { EmptyState } from '../components/StateViews'
+import { EquityCurve } from '../components/EquityCurve'
+import { SnapshotDetail } from '../components/SnapshotDetail'
+import { Toggle } from '../components/Toggle'
 
 // ==================== Types ====================
 
@@ -32,17 +37,61 @@ const EMPTY: PortfolioData = { equity: null, accounts: [] }
 // ==================== Page ====================
 
 export function PortfolioPage() {
+  const healthMap = useAccountHealth()
   const [data, setData] = useState<PortfolioData>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [curvePoints, setCurvePoints] = useState<EquityCurvePoint[]>([])
+  const [curveAccountId, setCurveAccountId] = useState<string | 'all'>('') // '' = not yet initialized
+  const [selectedTimestamp, setSelectedTimestamp] = useState<string | null>(null)
+  const [selectedSnapshot, setSelectedSnapshot] = useState<UTASnapshotSummary | null>(null)
+  const [snapshotEnabled, setSnapshotEnabled] = useState(true)
+  const [snapshotEvery, setSnapshotEvery] = useState('15m')
+
+  const snapshotConfig = useMemo(() => ({ enabled: snapshotEnabled, every: snapshotEvery }), [snapshotEnabled, snapshotEvery])
+  const saveSnapshotConfig = useCallback(async (d: Record<string, unknown>) => {
+    await api.config.updateSection('snapshot', d)
+  }, [])
+  const { status: snapshotSaveStatus } = useAutoSave({ data: snapshotConfig, save: saveSnapshotConfig })
+
+  // Fetch curve data for a specific account or all
+  const fetchCurveData = useCallback(async (accountId: string | 'all') => {
+    if (accountId === 'all') {
+      const result = await api.trading.equityCurve({ limit: 200 }).catch(() => ({ points: [] }))
+      return result.points
+    }
+    // Single account — fetch its snapshots and convert to EquityCurvePoint format
+    const { snapshots } = await api.trading.snapshots(accountId, { limit: 200 }).catch(() => ({ snapshots: [] as UTASnapshotSummary[] }))
+    return snapshots
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+      .map(s => ({
+        timestamp: s.timestamp,
+        equity: s.account.netLiquidation,
+        accounts: { [accountId]: s.account.netLiquidation },
+      }))
+  }, [])
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    const result = await fetchPortfolioData()
+    const [result, configResult] = await Promise.all([
+      fetchPortfolioData(),
+      api.config.load().catch(() => null),
+    ])
     setData(result)
+    if (configResult?.snapshot) {
+      setSnapshotEnabled(configResult.snapshot.enabled)
+      setSnapshotEvery(configResult.snapshot.every)
+    }
+
+    // Default to first account on initial load
+    const effectiveId = curveAccountId || result.accounts[0]?.id || 'all'
+    if (!curveAccountId && effectiveId) setCurveAccountId(effectiveId)
+    const points = await fetchCurveData(effectiveId)
+    setCurvePoints(points)
+
     setLastRefresh(new Date())
     setLoading(false)
-  }, [])
+  }, [curveAccountId, fetchCurveData])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -59,11 +108,35 @@ export function PortfolioPage() {
     a.walletLog.map(c => ({ ...c, accountLabel: a.label, accountProvider: a.provider })),
   )
 
+  // Account list for the chart switcher
+  const chartAccounts = data.accounts.map(a => ({ id: a.id, label: a.label }))
+
+  const handleAccountChange = useCallback(async (id: string | 'all') => {
+    setCurveAccountId(id)
+    setSelectedSnapshot(null)
+    setSelectedTimestamp(null)
+    const points = await fetchCurveData(id)
+    setCurvePoints(points)
+  }, [fetchCurveData])
+
+  const handlePointClick = useCallback(async (point: EquityCurvePoint) => {
+    setSelectedTimestamp(point.timestamp)
+    const accountId = curveAccountId !== 'all' ? curveAccountId : Object.keys(point.accounts)[0]
+    if (!accountId) return
+    try {
+      const { snapshots } = await api.trading.snapshots(accountId, { limit: 1 })
+      if (snapshots.length > 0) setSelectedSnapshot(snapshots[0])
+    } catch {
+      // Ignore — snapshot fetch failed
+    }
+  }, [curveAccountId])
+
   // Merge equity per-account data with provider info + per-account unrealizedPnL from positions
   const accountSources = (data.equity?.accounts ?? []).map(eq => {
     const acct = data.accounts.find(a => a.id === eq.id)
     const unrealizedPnL = acct?.positions.reduce((sum, p) => sum + p.unrealizedPnL, 0) ?? 0
-    return { ...eq, provider: acct?.provider ?? '', unrealizedPnL, error: acct?.error, health: eq.health }
+    const hInfo = healthMap[eq.id]
+    return { ...eq, provider: acct?.provider ?? '', unrealizedPnL, error: acct?.error, health: eq.health, disabled: hInfo?.disabled ?? false }
   })
 
   return (
@@ -86,6 +159,32 @@ export function PortfolioPage() {
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
         <div className="max-w-[900px] space-y-5">
           <HeroMetrics equity={data.equity} />
+
+          {curvePoints.length > 0 && (
+            <EquityCurve
+              points={curvePoints}
+              accounts={chartAccounts}
+              selectedAccountId={curveAccountId}
+              onAccountChange={handleAccountChange}
+              onPointClick={handlePointClick}
+              selectedTimestamp={selectedTimestamp}
+            />
+          )}
+
+          <SnapshotSettings
+            enabled={snapshotEnabled}
+            every={snapshotEvery}
+            onEnabledChange={setSnapshotEnabled}
+            onEveryChange={setSnapshotEvery}
+            saveStatus={snapshotSaveStatus}
+          />
+
+          {selectedSnapshot && (
+            <SnapshotDetail
+              snapshot={selectedSnapshot}
+              onClose={() => { setSelectedSnapshot(null); setSelectedTimestamp(null) }}
+            />
+          )}
 
           {accountSources.length > 0 && (
             <AccountStrip sources={accountSources} />
@@ -172,7 +271,7 @@ function HeroItem({ label, value, pnl }: { label: string; value: string; pnl?: n
   return (
     <div>
       <p className="text-[11px] text-text-muted uppercase tracking-wide">{label}</p>
-      <p className={`text-[20px] md:text-[24px] font-semibold ${color}`}>{value}</p>
+      <p className={`text-[22px] md:text-[28px] font-bold tabular-nums ${color}`}>{value}</p>
     </div>
   )
 }
@@ -185,28 +284,33 @@ const HEALTH_DOT: Record<string, string> = {
   offline: 'bg-red',
 }
 
-function AccountStrip({ sources }: { sources: Array<{ id: string; label: string; provider: string; equity: number; unrealizedPnL: number; error?: string; health?: string }> }) {
+function AccountStrip({ sources }: { sources: Array<{ id: string; label: string; provider: string; equity: number; unrealizedPnL: number; error?: string; health?: string; disabled?: boolean }> }) {
   return (
     <div className="flex flex-wrap gap-2">
       {sources.map(s => {
-        const dotColor = HEALTH_DOT[s.health ?? 'healthy'] ?? 'bg-text-muted'
-        const isOffline = s.health === 'offline'
+        const isDisabled = s.disabled
+        const isOffline = s.health === 'offline' && !isDisabled
+        const dotColor = isDisabled
+          ? 'bg-text-muted/40'
+          : (HEALTH_DOT[s.health ?? 'healthy'] ?? 'bg-text-muted')
         return (
-          <div key={s.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-bg-secondary text-[12px] ${isOffline ? 'opacity-60' : ''}`}>
+          <div key={s.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-bg-secondary text-[12px] ${isOffline || isDisabled ? 'opacity-60' : ''}`}>
             <div className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
             <span className="text-text font-medium">{s.label}</span>
-            {isOffline
-              ? <span className="text-red text-[11px]">Reconnecting…</span>
-              : <>
-                  <span className="text-text-muted">{fmt(s.equity)}</span>
-                  {s.unrealizedPnL !== 0 && (
-                    <span className={s.unrealizedPnL >= 0 ? 'text-green' : 'text-red'}>
-                      {fmtPnl(s.unrealizedPnL)}
-                    </span>
-                  )}
-                </>
+            {isDisabled
+              ? <span className="text-text-muted text-[11px]">Disabled</span>
+              : isOffline
+                ? <span className="text-red text-[11px]">Reconnecting...</span>
+                : <>
+                    <span className="text-text-muted">{fmt(s.equity)}</span>
+                    {s.unrealizedPnL !== 0 && (
+                      <span className={s.unrealizedPnL >= 0 ? 'text-green' : 'text-red'}>
+                        {fmtPnl(s.unrealizedPnL)}
+                      </span>
+                    )}
+                  </>
             }
-            {s.error && !isOffline && <span className="text-text-muted/50">{s.error}</span>}
+            {s.error && !isOffline && !isDisabled && <span className="text-text-muted/50">{s.error}</span>}
           </div>
         )
       })}
@@ -221,11 +325,10 @@ interface PositionWithAccount extends Position {
   accountProvider: string
 }
 
-/** True when the position carries derivative-specific context worth showing (side/leverage). */
+/** True when the position carries derivative-specific context worth showing. */
 function isDerivative(p: Position): boolean {
   const t = p.contract.secType
   if (t === 'FUT' || t === 'OPT' || t === 'FOP') return true
-  if (t === 'CRYPTO' && (p.leverage ?? 1) > 1) return true
   return p.side === 'short'
 }
 
@@ -246,7 +349,7 @@ function contractDisplay(p: Position): { name: string; tag?: string } {
     return { name: expiry ? `${sym} ${expiry}` : sym, tag: 'fut' }
   }
   if (t === 'CRYPTO') {
-    return { name: sym, tag: (p.leverage ?? 1) > 1 ? 'swap' : 'spot' }
+    return { name: sym, tag: 'spot' }
   }
   // STK, CASH, BOND, CMDTY, etc. — just the symbol, no tag
   return { name: sym }
@@ -275,7 +378,6 @@ function PositionsTable({ positions }: { positions: PositionWithAccount[] }) {
             {positions.map((p, i) => {
               const display = contractDisplay(p)
               const deriv = isDerivative(p)
-              const hasMarginInfo = p.margin || p.liquidationPrice
 
               return (
                 <tr key={i} className="border-t border-border hover:bg-bg-tertiary/30 transition-colors">
@@ -291,19 +393,8 @@ function PositionsTable({ positions }: { positions: PositionWithAccount[] }) {
                           {p.side}
                         </span>
                       )}
-                      {(p.leverage ?? 1) > 1 && (
-                        <span className="text-[10px] px-1 py-0.5 rounded bg-accent/15 text-accent font-medium">{p.leverage}x</span>
-                      )}
                       <span className="text-[10px] text-text-muted/50">{p.accountLabel}</span>
                     </div>
-                    {/* Secondary: margin / liquidation for derivatives */}
-                    {hasMarginInfo && (
-                      <div className="text-[11px] text-text-muted mt-0.5">
-                        {p.margin ? `Margin ${fmt(p.margin)}` : ''}
-                        {p.margin && p.liquidationPrice ? ' \u00b7 ' : ''}
-                        {p.liquidationPrice ? `Liq ${fmt(p.liquidationPrice)}` : ''}
-                      </div>
-                    )}
                   </td>
                   <td className="px-3 py-2 text-right text-text">{fmtNum(Number(p.quantity))}</td>
                   <td className="px-3 py-2 text-right text-text-muted">{fmt(p.avgCost)}</td>
@@ -387,6 +478,71 @@ function TradeLog({ commits }: { commits: CommitWithAccount[] }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// ==================== Formatting Helpers ====================
+
+// ==================== Snapshot Settings ====================
+
+const INTERVAL_PRESETS = [
+  { label: '1m', value: '1m' },
+  { label: '5m', value: '5m' },
+  { label: '15m', value: '15m' },
+  { label: '30m', value: '30m' },
+  { label: '1h', value: '1h' },
+]
+
+function SnapshotSettings({ enabled, every, onEnabledChange, onEveryChange, saveStatus }: {
+  enabled: boolean
+  every: string
+  onEnabledChange: (v: boolean) => void
+  onEveryChange: (v: string) => void
+  saveStatus: string
+}) {
+  const isPreset = INTERVAL_PRESETS.some(p => p.value === every)
+  const [showCustom, setShowCustom] = useState(!isPreset)
+
+  return (
+    <div className="flex items-center gap-3 text-[12px] text-text-muted">
+      <span className="font-medium uppercase tracking-wide">Snapshots</span>
+      <Toggle checked={enabled} onChange={onEnabledChange} size="sm" />
+      <div className="flex gap-0.5">
+        {INTERVAL_PRESETS.map(p => (
+          <button
+            key={p.value}
+            onClick={() => { onEveryChange(p.value); setShowCustom(false) }}
+            className={`px-2 py-0.5 text-[11px] rounded transition-colors ${
+              every === p.value && !showCustom
+                ? 'bg-accent/20 text-accent font-medium'
+                : 'hover:text-text hover:bg-bg-tertiary'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+        <button
+          onClick={() => setShowCustom(true)}
+          className={`px-2 py-0.5 text-[11px] rounded transition-colors ${
+            showCustom
+              ? 'bg-accent/20 text-accent font-medium'
+              : 'hover:text-text hover:bg-bg-tertiary'
+          }`}
+        >
+          Custom
+        </button>
+      </div>
+      {showCustom && (
+        <input
+          className="w-16 px-1.5 py-0.5 rounded border border-border bg-bg text-text text-[12px] text-center"
+          value={every}
+          onChange={(e) => onEveryChange(e.target.value)}
+          placeholder="e.g. 2h"
+        />
+      )}
+      {saveStatus === 'saving' && <span className="text-accent text-[10px]">saving...</span>}
+      {saveStatus === 'error' && <span className="text-red text-[10px]">save failed</span>}
     </div>
   )
 }

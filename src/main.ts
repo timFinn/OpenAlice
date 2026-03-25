@@ -1,24 +1,15 @@
 import { readFile, writeFile, appendFile, mkdir } from 'fs/promises'
 import { resolve, dirname } from 'path'
 // Engine removed — AgentCenter is the top-level AI entry point
-import { loadConfig, loadTradingConfig } from './core/config.js'
+import { loadConfig, readAccountsConfig } from './core/config.js'
 import type { Plugin, EngineContext, ReconnectResult } from './core/types.js'
 import { McpPlugin } from './server/mcp.js'
 import { TelegramPlugin } from './connectors/telegram/index.js'
 import { WebPlugin } from './connectors/web/index.js'
 import { McpAskPlugin } from './connectors/mcp-ask/index.js'
 import { createThinkingTools } from './tool/thinking.js'
-import {
-  AccountManager,
-  UnifiedTradingAccount,
-  CcxtBroker,
-  createCcxtProviderTools,
-  createPlatformFromConfig,
-  createBrokerFromConfig,
-  validatePlatformRefs,
-} from './domain/trading/index.js'
+import { AccountManager, createSnapshotService, createSnapshotScheduler } from './domain/trading/index.js'
 import { createTradingTools } from './tool/trading.js'
-import type { GitExportState, IPlatform } from './domain/trading/index.js'
 import { Brain } from './domain/brain/index.js'
 import { createBrainTools } from './tool/brain.js'
 import type { BrainExportState } from './domain/brain/index.js'
@@ -55,20 +46,10 @@ import { createNewsArchiveTools } from './tool/news.js'
 
 const BRAIN_FILE = resolve('data/brain/commit.json')
 
-/** Per-account git state path. Falls back to legacy paths for backward compat.
- *  TODO: remove LEGACY_GIT_PATHS before v1.0 */
-function gitFilePath(accountId: string): string {
-  return resolve(`data/trading/${accountId}/commit.json`)
-}
-const LEGACY_GIT_PATHS: Record<string, string> = {
-  'bybit-main': resolve('data/crypto-trading/commit.json'),
-  'alpaca-paper': resolve('data/securities-trading/commit.json'),
-  'alpaca-live': resolve('data/securities-trading/commit.json'),
-}
 const FRONTAL_LOBE_FILE = resolve('data/brain/frontal-lobe.md')
 const EMOTION_LOG_FILE = resolve('data/brain/emotion-log.md')
 const PERSONA_FILE = resolve('data/brain/persona.md')
-const PERSONA_DEFAULT = resolve('data/default/persona.default.md')
+const PERSONA_DEFAULT = resolve('default/persona.default.md')
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -83,67 +64,36 @@ async function readWithDefault(target: string, defaultFile: string): Promise<str
   } catch { return '' }
 }
 
-/** Create a git commit persistence callback for a given file path. */
-function createGitPersister(filePath: string) {
-  return async (state: GitExportState) => {
-    await mkdir(dirname(filePath), { recursive: true })
-    await writeFile(filePath, JSON.stringify(state, null, 2))
-  }
-}
-
-/** Read saved git state from disk, trying primary path then legacy fallback. */
-async function loadGitState(accountId: string): Promise<GitExportState | undefined> {
-  const primary = gitFilePath(accountId)
-  try {
-    return JSON.parse(await readFile(primary, 'utf-8')) as GitExportState
-  } catch { /* try legacy */ }
-  const legacy = LEGACY_GIT_PATHS[accountId]
-  if (legacy) {
-    try {
-      return JSON.parse(await readFile(legacy, 'utf-8')) as GitExportState
-    } catch { /* no saved state */ }
-  }
-  return undefined
-}
-
 async function main() {
   const config = await loadConfig()
 
+  // ==================== Event Log ====================
+
+  const eventLog = await createEventLog()
+  const toolCallLog = await createToolCallLog()
+
+  // ==================== Tool Center (created early — AccountManager needs it) ====================
+
+  const toolCenter = new ToolCenter()
+
   // ==================== Trading Account Manager ====================
 
-  const accountManager = new AccountManager()
+  const accountManager = new AccountManager({ eventLog, toolCenter })
 
-  // ==================== Platform-driven Account Init ====================
-
-  const tradingConfig = await loadTradingConfig()
-  const platformRegistry = new Map<string, IPlatform>()
-  for (const pc of tradingConfig.platforms) {
-    platformRegistry.set(pc.id, createPlatformFromConfig(pc))
+  const accountConfigs = await readAccountsConfig()
+  for (const accCfg of accountConfigs) {
+    if (accCfg.enabled === false) continue
+    await accountManager.initAccount(accCfg)
   }
-  validatePlatformRefs([...platformRegistry.values()], tradingConfig.accounts)
+  accountManager.registerCcxtToolsIfNeeded()
 
-  /** Create and register a UTA. Broker connection happens asynchronously inside UTA. */
-  async function initAccount(
-    accountCfg: { id: string; platformId: string; guards: Array<{ type: string; options: Record<string, unknown> }> },
-    platform: IPlatform,
-  ): Promise<UnifiedTradingAccount> {
-    const broker = createBrokerFromConfig(platform, accountCfg)
-    const savedState = await loadGitState(accountCfg.id)
-    const filePath = gitFilePath(accountCfg.id)
-    const uta = new UnifiedTradingAccount(broker, {
-      guards: accountCfg.guards,
-      savedState,
-      onCommit: createGitPersister(filePath),
-      platformId: accountCfg.platformId,
-    })
-    accountManager.add(uta)
-    return uta
-  }
+  // ==================== Snapshot ====================
 
-  for (const accCfg of tradingConfig.accounts) {
-    const platform = platformRegistry.get(accCfg.platformId)!
-    await initAccount(accCfg, platform)
-  }
+  const snapshotService = createSnapshotService({ accountManager, eventLog })
+  accountManager.setSnapshotHooks({
+    onPostPush: (id) => { snapshotService.takeSnapshot(id, 'post-push') },
+    onPostReject: (id) => { snapshotService.takeSnapshot(id, 'post-reject') },
+  })
 
   // ==================== Brain ====================
 
@@ -182,11 +132,6 @@ async function main() {
     '',
     `**Emotion:** ${emotion}`,
   ].join('\n')
-
-  // ==================== Event Log ====================
-
-  const eventLog = await createEventLog()
-  const toolCallLog = await createToolCallLog()
 
   // ==================== Cron ====================
 
@@ -230,9 +175,8 @@ async function main() {
   const symbolIndex = new SymbolIndex()
   await symbolIndex.load(equityClient)
 
-  // ==================== Tool Center ====================
+  // ==================== Tool Registration ====================
 
-  const toolCenter = new ToolCenter()
   toolCenter.register(createThinkingTools(), 'thinking')
 
   // One unified set of trading tools — routes via `source` parameter at runtime
@@ -288,6 +232,14 @@ async function main() {
   cronListener.start()
   console.log('cron: engine + listener started')
 
+  // ==================== Snapshot Scheduler ====================
+
+  const snapshotScheduler = createSnapshotScheduler({ snapshotService, cronEngine, eventLog, config: config.snapshot })
+  await snapshotScheduler.start()
+  if (config.snapshot.enabled) {
+    console.log(`snapshot: scheduler started (every ${config.snapshot.every})`)
+  }
+
   // ==================== Heartbeat ====================
 
   const heartbeat = createHeartbeat({
@@ -310,68 +262,6 @@ async function main() {
     })
     newsCollector.start()
     console.log(`news-collector: started (${config.news.feeds.length} feeds, every ${config.news.intervalMinutes}m)`)
-  }
-
-  // ==================== Account Reconnect ====================
-
-  const reconnectingAccounts = new Set<string>()
-
-  const reconnectAccount = async (accountId: string): Promise<ReconnectResult> => {
-    if (reconnectingAccounts.has(accountId)) {
-      return { success: false, error: 'Reconnect already in progress' }
-    }
-    reconnectingAccounts.add(accountId)
-    try {
-      // Re-read trading config to pick up credential/guard changes
-      const freshTrading = await loadTradingConfig()
-
-      // Close old account
-      const currentUta = accountManager.get(accountId)
-      if (currentUta) {
-        await currentUta.close()
-        accountManager.remove(accountId)
-      }
-
-      // Find this account in fresh config
-      const accCfg = freshTrading.accounts.find((a) => a.id === accountId)
-      if (!accCfg) {
-        return { success: true, message: `Account "${accountId}" not found in config (removed or disabled)` }
-      }
-
-      // Build platform registry from fresh config
-      const freshPlatforms = new Map<string, IPlatform>()
-      for (const pc of freshTrading.platforms) {
-        freshPlatforms.set(pc.id, createPlatformFromConfig(pc))
-      }
-
-      const platform = freshPlatforms.get(accCfg.platformId)
-      if (!platform) {
-        return { success: false, error: `Platform "${accCfg.platformId}" not found for account "${accountId}"` }
-      }
-
-      const ok = await initAccount(accCfg, platform)
-      if (!ok) {
-        return { success: false, error: `Account "${accountId}" init failed` }
-      }
-
-      // Re-register CCXT-specific tools if this is a CCXT account
-      if (platform.providerType !== 'alpaca') {
-        toolCenter.register(
-          createCcxtProviderTools(accountManager),
-          'trading-ccxt',
-        )
-      }
-
-      const label = accountManager.get(accountId)?.label ?? accountId
-      console.log(`reconnect: ${label} online`)
-      return { success: true, message: `${label} reconnected` }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`reconnect: ${accountId} failed:`, msg)
-      return { success: false, error: msg }
-    } finally {
-      reconnectingAccounts.delete(accountId)
-    }
   }
 
   // ==================== Plugins ====================
@@ -489,8 +379,7 @@ async function main() {
 
   const ctx: EngineContext = {
     config, connectorCenter, agentCenter, eventLog, toolCallLog, heartbeat, cronEngine, toolCenter,
-    accountManager,
-    reconnectAccount,
+    accountManager, snapshotService,
     reconnectConnectors,
   }
 
@@ -501,25 +390,13 @@ async function main() {
 
   console.log('engine: started')
 
-  // ==================== CCXT Tools ====================
-  // All UTAs are registered synchronously — check if any are CCXT and register provider tools.
-  {
-    const hasCcxt = accountManager.resolve().some((uta) => uta.broker instanceof CcxtBroker)
-    if (hasCcxt) {
-      toolCenter.register(
-        createCcxtProviderTools(accountManager),
-        'trading-ccxt',
-      )
-      console.log('ccxt: provider tools registered')
-    }
-  }
-
   // ==================== Shutdown ====================
 
   let stopped = false
   const shutdown = async () => {
     stopped = true
     newsCollector?.stop()
+    snapshotScheduler.stop()
     heartbeat.stop()
     cronListener.stop()
     cronEngine.stop()

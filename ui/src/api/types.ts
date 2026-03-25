@@ -79,6 +79,10 @@ export interface AppConfig {
     prompt: string
     activeHours: { start: string; end: string; timezone: string } | null
   }
+  snapshot: {
+    enabled: boolean
+    every: string
+  }
   connectors: ConnectorsConfig
   [key: string]: unknown
 }
@@ -147,6 +151,25 @@ export interface CronJob {
 
 // ==================== Trading ====================
 
+export type BrokerHealth = 'healthy' | 'degraded' | 'offline'
+
+export interface BrokerHealthInfo {
+  status: BrokerHealth
+  consecutiveFailures: number
+  lastError?: string
+  lastSuccessAt?: string
+  lastFailureAt?: string
+  recovering: boolean
+  disabled: boolean
+}
+
+export interface AccountSummary {
+  id: string
+  label: string
+  capabilities: { supportedSecTypes: string[]; supportedOrderTypes: string[] }
+  health: BrokerHealthInfo
+}
+
 export interface TradingAccount {
   id: string
   provider: string
@@ -183,9 +206,6 @@ export interface Position {
   marketValue: number
   unrealizedPnL: number
   realizedPnL: number
-  leverage?: number
-  margin?: number
-  liquidationPrice?: number
 }
 
 export interface WalletCommitLog {
@@ -250,35 +270,96 @@ export interface ToolCallRecord {
 
 // ==================== Trading Config ====================
 
-export interface CcxtPlatformConfig {
-  id: string
-  label?: string
-  type: 'ccxt'
-  exchange: string
-  sandbox: boolean
-  demoTrading: boolean
-}
-
-export interface AlpacaPlatformConfig {
-  id: string
-  label?: string
-  type: 'alpaca'
-  paper: boolean
-}
-
-export type PlatformConfig = CcxtPlatformConfig | AlpacaPlatformConfig
-
 export interface AccountConfig {
   id: string
-  platformId: string
   label?: string
-  apiKey?: string
-  apiSecret?: string
-  password?: string
+  type: string
+  enabled: boolean
   guards: GuardEntry[]
+  brokerConfig: Record<string, unknown>
+}
+
+// ==================== Broker Type Metadata (from /broker-types endpoint) ====================
+
+export interface BrokerConfigField {
+  name: string
+  type: 'text' | 'password' | 'number' | 'boolean' | 'select'
+  label: string
+  placeholder?: string
+  default?: unknown
+  required?: boolean
+  options?: Array<{ value: string; label: string }>
+  description?: string
+  sensitive?: boolean
+}
+
+export interface SubtitleField {
+  field: string
+  label?: string
+  falseLabel?: string
+  prefix?: string
+}
+
+export interface BrokerTypeInfo {
+  type: string
+  name: string
+  description: string
+  badge: string
+  badgeColor: string
+  fields: BrokerConfigField[]
+  subtitleFields: SubtitleField[]
+  guardCategory: 'crypto' | 'securities'
 }
 
 export interface GuardEntry {
   type: string
   options: Record<string, unknown>
+}
+
+export interface TestConnectionResult {
+  success: boolean
+  error?: string
+  account?: unknown
+}
+
+// ==================== Snapshots ====================
+
+export interface UTASnapshotSummary {
+  accountId: string
+  timestamp: string
+  trigger: string
+  account: {
+    netLiquidation: string
+    totalCashValue: string
+    unrealizedPnL: string
+    realizedPnL: string
+    buyingPower?: string
+    initMarginReq?: string
+    maintMarginReq?: string
+  }
+  positions: Array<{
+    aliceId: string
+    side: 'long' | 'short'
+    quantity: string
+    avgCost: string
+    marketPrice: string
+    marketValue: string
+    unrealizedPnL: string
+    realizedPnL: string
+  }>
+  openOrders: Array<{
+    orderId: string
+    aliceId: string
+    action: string
+    orderType: string
+    totalQuantity: string
+    status: string
+  }>
+  health: string
+}
+
+export interface EquityCurvePoint {
+  timestamp: string
+  equity: string
+  accounts: Record<string, string>
 }

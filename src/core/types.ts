@@ -1,4 +1,5 @@
 import type { AccountManager } from '../domain/trading/index.js'
+import type { SnapshotService } from '../domain/trading/snapshot/index.js'
 import type { CronEngine } from '../task/cron/engine.js'
 import type { Heartbeat } from '../task/heartbeat/index.js'
 import type { Config, WebChannel } from './config.js'
@@ -34,8 +35,7 @@ export interface EngineContext {
 
   // Trading (unified account model)
   accountManager: AccountManager
-  /** Reconnect a specific trading account by ID. */
-  reconnectAccount: (accountId: string) => Promise<ReconnectResult>
+  snapshotService?: SnapshotService
   /** Reconnect connector plugins (Telegram, MCP-Ask, etc.). */
   reconnectConnectors: () => Promise<ReconnectResult>
 }
