@@ -28,6 +28,8 @@ import { createAnalysisTools } from './tool/analysis.js'
 import { createPortfolioAnalyticsTools } from './tool/portfolio-analytics.js'
 import { createNewsSentimentTools } from './tool/news-sentiment.js'
 import { createScreenerTools } from './tool/screener.js'
+import { createVolatilityTools } from './tool/volatility.js'
+import { createFearGreedTools } from './tool/fear-greed.js'
 import { SessionStore } from './core/session.js'
 import { ConnectorCenter } from './core/connector-center.js'
 import { ToolCenter } from './core/tool-center.js'
@@ -197,6 +199,8 @@ async function main() {
   toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient), 'analysis')
   toolCenter.register(createPortfolioAnalyticsTools(accountManager, equityClient), 'portfolio-analytics')
   toolCenter.register(createScreenerTools(equityClient, symbolIndex), 'screener')
+  toolCenter.register(createVolatilityTools(equityClient), 'volatility')
+  toolCenter.register(createFearGreedTools(equityClient), 'fear-greed')
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered`)
 
