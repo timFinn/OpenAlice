@@ -108,6 +108,8 @@ export class AlpacaBroker implements IBroker {
   private static readonly MAX_INIT_RETRIES = 5
   private static readonly MAX_AUTH_RETRIES = 2
   private static readonly INIT_RETRY_BASE_MS = 1000
+  /** Alpaca allows one data_stream_v2 connection per user. Track the owning instance to avoid conflicts. */
+  private static dataStreamOwner: string | null = null
 
   async init(): Promise<void> {
     if (!this.config.apiKey || !this.config.secretKey) {
@@ -158,6 +160,9 @@ export class AlpacaBroker implements IBroker {
         this.client.data_stream_v2.disconnect()
         this.streamConnected = false
       }
+      if (AlpacaBroker.dataStreamOwner === this.id) {
+        AlpacaBroker.dataStreamOwner = null
+      }
     } catch { /* best effort */ }
     this.quoteCache.clear()
   }
@@ -168,83 +173,90 @@ export class AlpacaBroker implements IBroker {
 
   /** Connect the Alpaca data stream for real-time quote updates and trade status. Best-effort — failures don't block trading. */
   private connectDataStream(): void {
-    try {
-      const stream = this.client.data_stream_v2
-
-      stream.onConnect(() => {
-        this.streamConnected = true
-        console.log(`AlpacaBroker[${this.id}]: data stream connected`)
-        // Resubscribe any previously tracked symbols on reconnect
-        const subs = this.quoteCache.getSubscriptions()
-        if (subs.length > 0) {
-          stream.subscribeForQuotes(subs)
-          stream.subscribeForTrades(subs)
-        }
-      })
-
-      stream.onError((err: Error) => {
-        console.warn(`AlpacaBroker[${this.id}]: data stream error: ${err.message}`)
-      })
-
-      stream.onDisconnect(() => {
-        this.streamConnected = false
-        console.warn(`AlpacaBroker[${this.id}]: data stream disconnected`)
-      })
-
-      stream.onStockQuote((quote: { Symbol: string; BidPrice: number; AskPrice: number; Timestamp: string }) => {
-        const symbol = quote.Symbol
-        const existing = this.quoteCache.get(symbol)
-        this.quoteCache.set(symbol, {
-          contract: makeContract(symbol),
-          last: existing?.last ?? (quote.BidPrice + quote.AskPrice) / 2,
-          bid: quote.BidPrice,
-          ask: quote.AskPrice,
-          volume: existing?.volume ?? 0,
-          timestamp: new Date(quote.Timestamp),
-        })
-      })
-
-      stream.onStockTrade((trade: { Symbol: string; Price: number; Size: number; Timestamp: string }) => {
-        const symbol = trade.Symbol
-        const existing = this.quoteCache.get(symbol)
-        this.quoteCache.set(symbol, {
-          contract: makeContract(symbol),
-          last: trade.Price,
-          bid: existing?.bid ?? trade.Price,
-          ask: existing?.ask ?? trade.Price,
-          volume: (existing?.volume ?? 0) + trade.Size,
-          timestamp: new Date(trade.Timestamp),
-        })
-      })
-
-      stream.connect()
-
-      // Trade updates websocket — order fill/cancel notifications
+    // Alpaca allows only one data_stream_v2 connection per user login.
+    // First broker to init claims it; others fall back to REST quotes via getOrFetch.
+    if (AlpacaBroker.dataStreamOwner === null) {
+      AlpacaBroker.dataStreamOwner = this.id
       try {
-        const tradeWs = this.client.trade_ws
-        tradeWs.onConnect(() => {
-          tradeWs.subscribe(['trade_updates'])
-          console.log(`AlpacaBroker[${this.id}]: trade updates stream connected`)
+        const stream = this.client.data_stream_v2
+
+        stream.onConnect(() => {
+          this.streamConnected = true
+          console.log(`AlpacaBroker[${this.id}]: data stream connected`)
+          const subs = this.quoteCache.getSubscriptions()
+          if (subs.length > 0) {
+            stream.subscribeForQuotes(subs)
+            stream.subscribeForTrades(subs)
+          }
         })
-        tradeWs.onOrderUpdate((update: { order?: { id?: string; status?: string; filled_qty?: string; filled_avg_price?: string } }) => {
-          if (!this.orderUpdateCallback || !update.order) return
-          const o = update.order
-          this.orderUpdateCallback({
-            orderId: o.id ?? '',
-            status: o.status ?? '',
-            filledQty: o.filled_qty ? parseFloat(o.filled_qty) : undefined,
-            filledPrice: o.filled_avg_price ? parseFloat(o.filled_avg_price) : undefined,
+
+        stream.onError((err: Error) => {
+          console.warn(`AlpacaBroker[${this.id}]: data stream error: ${err?.message ?? err}`)
+        })
+
+        stream.onDisconnect(() => {
+          this.streamConnected = false
+          console.warn(`AlpacaBroker[${this.id}]: data stream disconnected`)
+        })
+
+        stream.onStockQuote((quote: { Symbol: string; BidPrice: number; AskPrice: number; Timestamp: string }) => {
+          const symbol = quote.Symbol
+          const existing = this.quoteCache.get(symbol)
+          this.quoteCache.set(symbol, {
+            contract: makeContract(symbol),
+            last: existing?.last ?? (quote.BidPrice + quote.AskPrice) / 2,
+            bid: quote.BidPrice,
+            ask: quote.AskPrice,
+            volume: existing?.volume ?? 0,
+            timestamp: new Date(quote.Timestamp),
           })
         })
-        tradeWs.onError((err: Error) => {
-          console.warn(`AlpacaBroker[${this.id}]: trade updates error: ${err?.message ?? err}`)
+
+        stream.onStockTrade((trade: { Symbol: string; Price: number; Size: number; Timestamp: string }) => {
+          const symbol = trade.Symbol
+          const existing = this.quoteCache.get(symbol)
+          this.quoteCache.set(symbol, {
+            contract: makeContract(symbol),
+            last: trade.Price,
+            bid: existing?.bid ?? trade.Price,
+            ask: existing?.ask ?? trade.Price,
+            volume: (existing?.volume ?? 0) + trade.Size,
+            timestamp: new Date(trade.Timestamp),
+          })
         })
-        tradeWs.connect()
+
+        stream.connect()
       } catch (err) {
-        console.warn(`AlpacaBroker[${this.id}]: failed to start trade updates stream: ${err instanceof Error ? err.message : err}`)
+        console.warn(`AlpacaBroker[${this.id}]: failed to start data stream: ${err instanceof Error ? err.message : err}`)
+        AlpacaBroker.dataStreamOwner = null
       }
+    } else {
+      console.log(`AlpacaBroker[${this.id}]: data stream owned by ${AlpacaBroker.dataStreamOwner} — using REST fallback for quotes`)
+    }
+
+    // Trade updates websocket — per-account order fill/cancel notifications (no per-user limit)
+    try {
+      const tradeWs = this.client.trade_ws
+      tradeWs.onConnect(() => {
+        tradeWs.subscribe(['trade_updates'])
+        console.log(`AlpacaBroker[${this.id}]: trade updates stream connected`)
+      })
+      tradeWs.onOrderUpdate((update: { order?: { id?: string; status?: string; filled_qty?: string; filled_avg_price?: string } }) => {
+        if (!this.orderUpdateCallback || !update.order) return
+        const o = update.order
+        this.orderUpdateCallback({
+          orderId: o.id ?? '',
+          status: o.status ?? '',
+          filledQty: o.filled_qty ? parseFloat(o.filled_qty) : undefined,
+          filledPrice: o.filled_avg_price ? parseFloat(o.filled_avg_price) : undefined,
+        })
+      })
+      tradeWs.onError((err: Error) => {
+        console.warn(`AlpacaBroker[${this.id}]: trade updates error: ${err?.message ?? err}`)
+      })
+      tradeWs.connect()
     } catch (err) {
-      console.warn(`AlpacaBroker[${this.id}]: failed to start data stream: ${err instanceof Error ? err.message : err}`)
+      console.warn(`AlpacaBroker[${this.id}]: failed to start trade updates stream: ${err instanceof Error ? err.message : err}`)
     }
   }
 
