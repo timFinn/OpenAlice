@@ -24,6 +24,7 @@ import {
   type MarketClock,
   type BrokerConfigField,
 } from '../types.js'
+import { QuoteCache } from '../../quote-cache.js'
 import '../../contract-ext.js'
 import type {
   AlpacaBrokerConfig,
@@ -92,6 +93,8 @@ export class AlpacaBroker implements IBroker {
 
   private client!: InstanceType<typeof Alpaca>
   private readonly config: AlpacaBrokerConfig
+  private readonly quoteCache = new QuoteCache()
+  private streamConnected = false
 
   constructor(config: AlpacaBrokerConfig) {
     this.config = config
@@ -126,6 +129,7 @@ export class AlpacaBroker implements IBroker {
         console.log(
           `AlpacaBroker[${this.id}]: connected (paper=${this.config.paper}, equity=$${parseFloat(account.equity).toFixed(2)})`,
         )
+        this.connectDataStream()
         return
       } catch (err) {
         lastErr = err
@@ -148,7 +152,70 @@ export class AlpacaBroker implements IBroker {
   }
 
   async close(): Promise<void> {
-    // Alpaca SDK has no explicit close
+    try {
+      if (this.streamConnected) {
+        this.client.data_stream_v2.disconnect()
+        this.streamConnected = false
+      }
+    } catch { /* best effort */ }
+    this.quoteCache.clear()
+  }
+
+  /** Connect the Alpaca data stream for real-time quote updates. Best-effort — failures don't block trading. */
+  private connectDataStream(): void {
+    try {
+      const stream = this.client.data_stream_v2
+
+      stream.onConnect(() => {
+        this.streamConnected = true
+        console.log(`AlpacaBroker[${this.id}]: data stream connected`)
+        // Resubscribe any previously tracked symbols on reconnect
+        const subs = this.quoteCache.getSubscriptions()
+        if (subs.length > 0) {
+          stream.subscribeForQuotes(subs)
+          stream.subscribeForTrades(subs)
+        }
+      })
+
+      stream.onError((err: Error) => {
+        console.warn(`AlpacaBroker[${this.id}]: data stream error: ${err.message}`)
+      })
+
+      stream.onDisconnect(() => {
+        this.streamConnected = false
+        console.warn(`AlpacaBroker[${this.id}]: data stream disconnected`)
+      })
+
+      stream.onStockQuote((quote: { Symbol: string; BidPrice: number; AskPrice: number; Timestamp: string }) => {
+        const symbol = quote.Symbol
+        const existing = this.quoteCache.get(symbol)
+        this.quoteCache.set(symbol, {
+          contract: makeContract(symbol),
+          last: existing?.last ?? (quote.BidPrice + quote.AskPrice) / 2,
+          bid: quote.BidPrice,
+          ask: quote.AskPrice,
+          volume: existing?.volume ?? 0,
+          timestamp: new Date(quote.Timestamp),
+        })
+      })
+
+      stream.onStockTrade((trade: { Symbol: string; Price: number; Size: number; Timestamp: string }) => {
+        const symbol = trade.Symbol
+        const existing = this.quoteCache.get(symbol)
+        this.quoteCache.set(symbol, {
+          contract: makeContract(symbol),
+          last: trade.Price,
+          bid: existing?.bid ?? trade.Price,
+          ask: existing?.ask ?? trade.Price,
+          volume: (existing?.volume ?? 0) + trade.Size,
+          timestamp: new Date(trade.Timestamp),
+        })
+      })
+
+      stream.connect()
+    } catch (err) {
+      console.warn(`AlpacaBroker[${this.id}]: failed to start data stream: ${err instanceof Error ? err.message : err}`)
+    }
   }
 
   // ---- Contract search ----
@@ -356,20 +423,30 @@ export class AlpacaBroker implements IBroker {
     const symbol = resolveSymbol(contract)
     if (!symbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to Alpaca symbol')
 
-    try {
-      const snapshot = await this.client.getSnapshot(symbol) as AlpacaSnapshotRaw
-
-      return {
-        contract: makeContract(symbol),
-        last: snapshot.LatestTrade.Price,
-        bid: snapshot.LatestQuote.BidPrice,
-        ask: snapshot.LatestQuote.AskPrice,
-        volume: snapshot.DailyBar.Volume,
-        timestamp: new Date(snapshot.LatestTrade.Timestamp),
-      }
-    } catch (err) {
-      throw BrokerError.from(err)
+    // Lazy-subscribe to streaming for this symbol
+    if (!this.quoteCache.has(symbol) && this.streamConnected) {
+      this.quoteCache.subscribe(symbol)
+      try {
+        this.client.data_stream_v2.subscribeForQuotes([symbol])
+        this.client.data_stream_v2.subscribeForTrades([symbol])
+      } catch { /* best effort */ }
     }
+
+    return this.quoteCache.getOrFetch(symbol, async () => {
+      try {
+        const snapshot = await this.client.getSnapshot(symbol) as AlpacaSnapshotRaw
+        return {
+          contract: makeContract(symbol),
+          last: snapshot.LatestTrade.Price,
+          bid: snapshot.LatestQuote.BidPrice,
+          ask: snapshot.LatestQuote.AskPrice,
+          volume: snapshot.DailyBar.Volume,
+          timestamp: new Date(snapshot.LatestTrade.Timestamp),
+        }
+      } catch (err) {
+        throw BrokerError.from(err)
+      }
+    })
   }
 
   // ---- Capabilities ----

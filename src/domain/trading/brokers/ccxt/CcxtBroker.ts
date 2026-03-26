@@ -23,6 +23,7 @@ import {
   type MarketClock,
   type BrokerConfigField,
 } from '../types.js'
+import { QuoteCache } from '../../quote-cache.js'
 import '../../contract-ext.js'
 import type { CcxtBrokerConfig, CcxtMarket, FundingRate, OrderBook, OrderBookLevel } from './ccxt-types.js'
 import { MAX_INIT_RETRIES, INIT_RETRY_BASE_MS } from './ccxt-types.js'
@@ -96,6 +97,9 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   private exchange: Exchange
   private exchangeName: string
   private initialized = false
+  private supportsStreaming = false
+  private readonly quoteCache = new QuoteCache()
+  private readonly watchAborts = new Map<string, AbortController>()
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
@@ -105,8 +109,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     this.id = config.id ?? `${config.exchange}-main`
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
 
+    // Prefer Pro class (adds watchTicker etc.) with fallback to standard
+    const proExchanges = (ccxt as Record<string, unknown>).pro as Record<string, new (opts: Record<string, unknown>) => Exchange> | undefined
     const exchanges = ccxt as unknown as Record<string, new (opts: Record<string, unknown>) => Exchange>
-    const ExchangeClass = exchanges[config.exchange]
+    const ExchangeClass = proExchanges?.[config.exchange] ?? exchanges[config.exchange]
     if (!ExchangeClass) {
       throw new BrokerError('CONFIG', `Unknown CCXT exchange: ${config.exchange}`)
     }
@@ -200,11 +206,59 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       throw new BrokerError('NETWORK', `CcxtBroker[${this.id}]: failed to load any markets`)
     }
     this.initialized = true
-    console.log(`CcxtBroker[${this.id}]: connected (${this.exchangeName}, ${marketCount} markets loaded)`)
+
+    // Detect streaming support (Pro class with watchTicker)
+    this.supportsStreaming = typeof (this.exchange as unknown as Record<string, unknown>).watchTicker === 'function'
+    console.log(`CcxtBroker[${this.id}]: connected (${this.exchangeName}, ${marketCount} markets, streaming=${this.supportsStreaming})`)
   }
 
   async close(): Promise<void> {
-    // CCXT exchanges typically don't need explicit closing
+    // Abort all watch loops
+    for (const [, controller] of this.watchAborts) {
+      controller.abort()
+    }
+    this.watchAborts.clear()
+    this.quoteCache.clear()
+    // Close websocket connections if the Pro exchange supports it
+    try {
+      await (this.exchange as unknown as { close?: () => Promise<void> }).close?.()
+    } catch { /* best effort */ }
+  }
+
+  /** Start a background watchTicker loop for a symbol. Populates the quote cache on each update. */
+  private startWatchLoop(ccxtSymbol: string, contract: Contract): void {
+    if (this.watchAborts.has(ccxtSymbol)) return // already watching
+    if (!this.supportsStreaming) return
+
+    const controller = new AbortController()
+    this.watchAborts.set(ccxtSymbol, controller)
+    this.quoteCache.subscribe(ccxtSymbol)
+
+    const loop = async () => {
+      const watchTicker = (this.exchange as unknown as { watchTicker: (symbol: string) => Promise<Record<string, unknown>> }).watchTicker
+      while (!controller.signal.aborted) {
+        try {
+          const ticker = await watchTicker.call(this.exchange, ccxtSymbol)
+          this.quoteCache.set(ccxtSymbol, {
+            contract,
+            last: (ticker.last as number) ?? 0,
+            bid: (ticker.bid as number) ?? 0,
+            ask: (ticker.ask as number) ?? 0,
+            volume: (ticker.baseVolume as number) ?? 0,
+            high: (ticker.high as number) ?? undefined,
+            low: (ticker.low as number) ?? undefined,
+            timestamp: new Date((ticker.timestamp as number) ?? Date.now()),
+          })
+        } catch (err) {
+          if (controller.signal.aborted) break
+          console.warn(`CcxtBroker[${this.id}]: watchTicker(${ccxtSymbol}) error: ${err instanceof Error ? err.message : err}`)
+          // Back off on error before retrying
+          await new Promise(r => setTimeout(r, 5_000))
+        }
+      }
+    }
+
+    loop().catch(() => { /* loop exits on abort */ })
   }
 
   // ---- Contract search ----
@@ -564,25 +618,29 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     const ccxtSymbol = contractToCcxt(contract, this.markets, this.exchangeName)
     if (!ccxtSymbol) throw new BrokerError('EXCHANGE', 'Cannot resolve contract to CCXT symbol')
 
-    try {
-      const ticker = await this.exchange.fetchTicker(ccxtSymbol)
-      const market = this.markets[ccxtSymbol]
+    const market = this.markets[ccxtSymbol]
+    const resolvedContract = market ? marketToContract(market, this.exchangeName) : contract
 
-      return {
-        contract: market
-          ? marketToContract(market, this.exchangeName)
-          : contract,
-        last: ticker.last ?? 0,
-        bid: ticker.bid ?? 0,
-        ask: ticker.ask ?? 0,
-        volume: ticker.baseVolume ?? 0,
-        high: ticker.high ?? undefined,
-        low: ticker.low ?? undefined,
-        timestamp: new Date(ticker.timestamp ?? Date.now()),
+    // Start streaming for this symbol if not already watching
+    this.startWatchLoop(ccxtSymbol, resolvedContract)
+
+    return this.quoteCache.getOrFetch(ccxtSymbol, async () => {
+      try {
+        const ticker = await this.exchange.fetchTicker(ccxtSymbol)
+        return {
+          contract: resolvedContract,
+          last: ticker.last ?? 0,
+          bid: ticker.bid ?? 0,
+          ask: ticker.ask ?? 0,
+          volume: ticker.baseVolume ?? 0,
+          high: ticker.high ?? undefined,
+          low: ticker.low ?? undefined,
+          timestamp: new Date(ticker.timestamp ?? Date.now()),
+        }
+      } catch (err) {
+        throw BrokerError.from(err)
       }
-    } catch (err) {
-      throw BrokerError.from(err)
-    }
+    })
   }
 
   // ---- Capabilities ----
