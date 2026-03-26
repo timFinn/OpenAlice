@@ -222,6 +222,8 @@ export const accountConfigSchema = z.object({
   label: z.string().optional(),
   type: z.string(),
   enabled: z.boolean().default(true),
+  /** When true, tradingPush executes immediately without manual UI approval. */
+  autoExecute: z.boolean().default(false),
   guards: z.array(guardConfigSchema).default([]),
   brokerConfig: z.record(z.string(), z.unknown()).default({}),
 })

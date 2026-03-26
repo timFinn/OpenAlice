@@ -83,6 +83,7 @@ export class AccountManager {
     const savedState = await loadGitState(accCfg.id)
     const uta = new UnifiedTradingAccount(broker, {
       guards: accCfg.guards,
+      autoExecute: accCfg.autoExecute,
       savedState,
       onCommit: createGitPersister(accCfg.id),
       onHealthChange: (accountId, health) => {

@@ -55,6 +55,8 @@ function toIbkrTif(tif: string): string {
 
 export interface UnifiedTradingAccountOptions {
   guards?: Array<{ type: string; options?: Record<string, unknown> }>
+  /** When true, tradingPush executes immediately without manual UI approval. */
+  autoExecute?: boolean
   savedState?: GitExportState
   onCommit?: (state: GitExportState) => void | Promise<void>
   onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
@@ -107,6 +109,7 @@ export class UnifiedTradingAccount {
   readonly label: string
   readonly broker: IBroker
   readonly git: TradingGit
+  readonly autoExecute: boolean
 
   private readonly _getState: () => Promise<GitState>
   private readonly _onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
@@ -132,6 +135,7 @@ export class UnifiedTradingAccount {
     this.broker = broker
     this.id = broker.id
     this.label = broker.label
+    this.autoExecute = options.autoExecute ?? false
     this._onHealthChange = options.onHealthChange
     this._onPostPush = options.onPostPush
     this._onPostReject = options.onPostReject

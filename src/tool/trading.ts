@@ -351,7 +351,10 @@ NOTE: This stages the operation. Call tradingCommit + tradingPush to execute.`,
     }),
 
     tradingPush: tool({
-      description: 'Trading push requires manual approval — call tradingStatus to show the user what is pending, then tell them to approve in the UI.',
+      description: `Execute committed trading operations. Behavior depends on account config:
+- autoExecute accounts: pushes immediately through the guard pipeline to the broker.
+- manual accounts: requires human approval in the UI.
+Call tradingStatus first to review what will be pushed.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, checks all accounts.')),
       }),
@@ -368,13 +371,36 @@ NOTE: This stages the operation. Call tradingCommit + tradingPush to execute.`,
           }
           return { message: 'No committed operations to push.' }
         }
-        return {
-          message: 'Push requires manual approval. The user can approve pending operations in the UI.',
-          pending: pending.map(uta => ({
-            source: uta.id,
-            ...uta.status(),
-          })),
+
+        // Split into auto-execute and manual accounts
+        const autoAccounts = pending.filter(uta => uta.autoExecute)
+        const manualAccounts = pending.filter(uta => !uta.autoExecute)
+
+        const results: Array<Record<string, unknown>> = []
+
+        // Auto-execute accounts: push immediately
+        for (const uta of autoAccounts) {
+          try {
+            const pushResult = await uta.push()
+            results.push({ source: uta.id, mode: 'auto', ...pushResult })
+          } catch (err) {
+            results.push({ source: uta.id, mode: 'auto', error: err instanceof Error ? err.message : String(err) })
+          }
         }
+
+        // Manual accounts: return pending status for UI approval
+        if (manualAccounts.length > 0) {
+          results.push({
+            message: 'Manual accounts require UI approval.',
+            pending: manualAccounts.map(uta => ({
+              source: uta.id,
+              mode: 'manual',
+              ...uta.status(),
+            })),
+          })
+        }
+
+        return results.length === 1 ? results[0] : results
       },
     }),
 
