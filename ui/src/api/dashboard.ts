@@ -42,6 +42,27 @@ export interface PaperScorecard {
   }>
 }
 
+export interface PredictionMarket {
+  title: string
+  question: string
+  probability: number | null
+  yesLabel: string
+  volume24h: number
+}
+
+export interface GDELTArticle {
+  title: string
+  source: string
+  country: string
+  time: string
+  url: string
+}
+
+export interface EconomyIndicator {
+  label: string
+  value: string | null
+}
+
 export const dashboardApi = {
   async pulse(): Promise<PulseData> {
     return fetchJson('/api/dashboard/pulse')
@@ -51,5 +72,14 @@ export const dashboardApi = {
   },
   async paperScorecard(account = 'alpaca-paper-auto'): Promise<PaperScorecard> {
     return fetchJson(`/api/dashboard/paper-scorecard?account=${account}`)
+  },
+  async predictionMarkets(limit = 5): Promise<{ markets: PredictionMarket[] }> {
+    return fetchJson(`/api/dashboard/prediction-markets?limit=${limit}`)
+  },
+  async gdelt(topic = 'financial', limit = 8): Promise<{ topic: string; articles: GDELTArticle[] }> {
+    return fetchJson(`/api/dashboard/gdelt?topic=${topic}&limit=${limit}`)
+  },
+  async economyStrip(): Promise<{ indicators: EconomyIndicator[] }> {
+    return fetchJson('/api/dashboard/economy-strip')
   },
 }

@@ -243,5 +243,139 @@ export function createDashboardRoutes(ctx: EngineContext) {
     })
   })
 
+  // Prediction market spotlight — top markets by 24h volume from Polymarket
+  app.get('/prediction-markets', async (c) => {
+    const limit = Number(c.req.query('limit')) || 5
+    try {
+      const params = new URLSearchParams({
+        active: 'true',
+        closed: 'false',
+        order: 'volume24hr',
+        ascending: 'false',
+        limit: String(limit),
+      })
+      const res = await fetch(`https://gamma-api.polymarket.com/events?${params}`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT),
+      })
+      if (!res.ok) return c.json({ markets: [], error: `Polymarket: ${res.status}` })
+
+      const events = await res.json() as Array<{
+        title: string
+        slug: string
+        volume24hr: number
+        markets?: Array<{
+          question: string
+          outcomePrices: string
+          outcomes: string
+          volume24hr: number
+        }>
+      }>
+
+      const markets = events.map(e => {
+        const topMarket = e.markets?.[0]
+        let probability: number | null = null
+        let yesLabel = 'Yes'
+        if (topMarket) {
+          try {
+            const prices = JSON.parse(topMarket.outcomePrices) as string[]
+            const outcomes = JSON.parse(topMarket.outcomes) as string[]
+            probability = Math.round(parseFloat(prices[0]) * 100)
+            yesLabel = outcomes[0] ?? 'Yes'
+          } catch { /* skip */ }
+        }
+        return {
+          title: e.title,
+          question: topMarket?.question ?? e.title,
+          probability,
+          yesLabel,
+          volume24h: Math.round(e.volume24hr ?? 0),
+        }
+      })
+
+      return c.json({ markets })
+    } catch (err) {
+      return c.json({ markets: [], error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+
+  // GDELT recent articles — financial & geopolitical topics
+  app.get('/gdelt', async (c) => {
+    const topic = c.req.query('topic') ?? 'financial'
+    const limit = Number(c.req.query('limit')) || 10
+
+    const TOPIC_QUERIES: Record<string, string> = {
+      financial: '"federal reserve" OR "interest rates" OR "bank failure" OR "economic recession" OR "inflation data"',
+      geopolitical: 'geopolitics OR sanctions OR "trade war" OR "diplomatic crisis" OR "border conflict"',
+      energy: '"oil price" OR OPEC OR "natural gas" OR "energy crisis" OR "energy sanctions"',
+    }
+
+    const query = TOPIC_QUERIES[topic] ?? TOPIC_QUERIES.financial
+
+    try {
+      const params = new URLSearchParams({
+        query,
+        mode: 'ArtList',
+        maxrecords: String(limit),
+        format: 'json',
+        sort: 'DateDesc',
+        timespan: '24h',
+      })
+
+      const res = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params}`, {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT),
+      })
+      if (!res.ok) return c.json({ articles: [], error: `GDELT: ${res.status}` })
+
+      const data = await res.json() as { articles?: Array<{ title: string; url: string; domain: string; seendate: string; sourcecountry: string }> }
+      const articles = (data.articles ?? []).map(a => ({
+        title: a.title,
+        source: a.domain,
+        country: a.sourcecountry,
+        time: a.seendate,
+        url: a.url,
+      }))
+
+      return c.json({ topic, articles })
+    } catch (err) {
+      return c.json({ articles: [], error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+
+  // Economy indicators — key FRED series
+  app.get('/economy-strip', async (c) => {
+    const SERIES: Array<{ id: string; label: string; suffix?: string }> = [
+      { id: 'DGS10', label: '10Y Yield', suffix: '%' },
+      { id: 'DGS2', label: '2Y Yield', suffix: '%' },
+      { id: 'FEDFUNDS', label: 'Fed Funds', suffix: '%' },
+      { id: 'T10Y2Y', label: '10Y-2Y Spread', suffix: '%' },
+    ]
+
+    const results: Array<{ label: string; value: string | null }> = []
+
+    await Promise.all(SERIES.map(async (s) => {
+      try {
+        const url = `${OPENBB_BASE}/api/v1/economy/fred_series?symbol=${s.id}&provider=federal_reserve&limit=5`
+        const res = await fetch(url, {
+          signal: AbortSignal.timeout(FETCH_TIMEOUT),
+          headers: { 'X-OpenBB-Credentials': JSON.stringify({ api_key: ctx.config?.marketData?.providerKeys?.fred ?? '' }) },
+        })
+        if (!res.ok) { results.push({ label: s.label, value: null }); return }
+        const data = await res.json() as { results?: Array<{ value?: number }> }
+        const latest = data.results?.filter(d => d.value != null).pop()
+        results.push({
+          label: s.label,
+          value: latest?.value != null ? `${latest.value.toFixed(2)}${s.suffix ?? ''}` : null,
+        })
+      } catch {
+        results.push({ label: s.label, value: null })
+      }
+    }))
+
+    // Maintain order
+    const ordered = SERIES.map(s => results.find(r => r.label === s.label) ?? { label: s.label, value: null })
+
+    return c.json({ indicators: ordered })
+  })
+
   return app
 }
