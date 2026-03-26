@@ -14,9 +14,10 @@ import { DevPage } from './pages/DevPage'
 import { HeartbeatPage } from './pages/HeartbeatPage'
 import { ToolsPage } from './pages/ToolsPage'
 import { AgentStatusPage } from './pages/AgentStatusPage'
+import { MarketPulsePage } from './pages/MarketPulsePage'
 
 export type Page =
-  | 'chat' | 'portfolio' | 'events' | 'agent-status' | 'heartbeat' | 'market-data' | 'news' | 'connectors'
+  | 'chat' | 'portfolio' | 'pulse' | 'events' | 'agent-status' | 'heartbeat' | 'market-data' | 'news' | 'connectors'
   | 'trading'
   | 'ai-provider' | 'settings' | 'tools' | 'dev'
 
@@ -24,6 +25,7 @@ export type Page =
 export const ROUTES: Record<Page, string> = {
   'chat': '/',
   'portfolio': '/portfolio',
+  'pulse': '/pulse',
   'events': '/events',
   'agent-status': '/agent-status',
   'heartbeat': '/heartbeat',
@@ -67,6 +69,7 @@ export function App() {
           <Routes>
             <Route path="/" element={<ChatPage onSSEStatus={setSseConnected} />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
+            <Route path="/pulse" element={<MarketPulsePage />} />
             <Route path="/events" element={<EventsPage />} />
             <Route path="/agent-status" element={<AgentStatusPage />} />
             <Route path="/heartbeat" element={<HeartbeatPage />} />

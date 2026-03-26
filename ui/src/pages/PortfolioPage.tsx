@@ -7,6 +7,7 @@ import { EmptyState } from '../components/StateViews'
 import { EquityCurve } from '../components/EquityCurve'
 import { SnapshotDetail } from '../components/SnapshotDetail'
 import { Toggle } from '../components/Toggle'
+import { PaperScorecard } from '../components/PaperScorecard'
 
 // ==================== Types ====================
 
@@ -185,6 +186,8 @@ export function PortfolioPage() {
               onClose={() => { setSelectedSnapshot(null); setSelectedTimestamp(null) }}
             />
           )}
+
+          <PaperScorecard />
 
           {accountSources.length > 0 && (
             <AccountStrip sources={accountSources} />
