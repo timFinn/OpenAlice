@@ -268,7 +268,7 @@ export function ChatPage({ onSSEStatus }: ChatPageProps) {
         )}
 
         {/* Scrollable messages */}
-        <div ref={containerRef} className="h-full overflow-y-auto px-5 py-6">
+        <div ref={containerRef} className="h-full overflow-y-auto px-3 md:px-5 py-4 md:py-6">
         {messages.length === 0 && !isWaiting && (
           <div className="flex-1 flex flex-col items-center justify-center h-full gap-4 select-none">
             <img
@@ -356,7 +356,7 @@ export function ChatPage({ onSSEStatus }: ChatPageProps) {
                     const last = streamSegments[streamSegments.length - 1]
                     if (last?.kind === 'tools' && last.tools.every((t) => t.status === 'done')) {
                       return (
-                        <div className="text-text-muted ml-8 mt-1">
+                        <div className="text-text-muted ml-0 md:ml-8 mt-1">
                           <div className="flex">
                             <span className="thinking-dot">.</span>
                             <span className="thinking-dot">.</span>

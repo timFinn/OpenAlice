@@ -87,7 +87,7 @@ export function ChatMessage({ role, text, timestamp, isGrouped, media }: ChatMes
 
   if (role === 'notification') {
     return (
-      <div className="flex items-start gap-3 message-enter ml-8">
+      <div className="flex items-start gap-3 message-enter ml-0 md:ml-8">
         <div className="w-0.5 shrink-0 self-stretch rounded-full bg-notification-border" />
         <div className="flex-1 min-w-0 py-0.5">
           <div className="flex items-center gap-1.5 mb-1">
@@ -111,7 +111,7 @@ export function ChatMessage({ role, text, timestamp, isGrouped, media }: ChatMes
   if (role === 'user') {
     return (
       <div className="flex flex-col items-end message-enter group">
-        <div className="max-w-[75%] px-4 py-3 bg-user-bubble rounded-2xl rounded-br-sm break-words">
+        <div className="max-w-[85%] md:max-w-[75%] px-3 md:px-4 py-3 bg-user-bubble rounded-2xl rounded-br-sm break-words">
           <span className="whitespace-pre-wrap leading-relaxed">{text}</span>
         </div>
         {timestamp && (
@@ -132,14 +132,14 @@ export function ChatMessage({ role, text, timestamp, isGrouped, media }: ChatMes
           <span className="text-[12px] text-text-muted font-medium">Alice</span>
         </div>
       )}
-      <div ref={contentRef} className="max-w-[90%] break-words leading-relaxed ml-8 bg-bg-tertiary/30 border border-border/30 rounded-2xl rounded-tl-sm px-4 py-3">
+      <div ref={contentRef} className="max-w-full md:max-w-[90%] break-words leading-relaxed ml-0 md:ml-8 bg-bg-tertiary/30 border border-border/30 rounded-2xl rounded-tl-sm px-3 md:px-4 py-3">
         <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html! }} />
         {media?.map((m, i) => (
           <img key={i} src={m.url} alt="" className="max-w-full rounded-lg mt-2" />
         ))}
       </div>
       {timestamp && (
-        <div className="text-[11px] text-text-muted mt-1 ml-8 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="text-[11px] text-text-muted mt-1 ml-0 md:ml-8 opacity-0 group-hover:opacity-100 transition-opacity">
           {new Date(timestamp).toLocaleString()}
         </div>
       )}
@@ -171,15 +171,15 @@ export function ToolCallGroup({ calls, timestamp }: ToolCallGroupProps) {
   const summary = calls.map((c) => c.name).join(', ')
 
   return (
-    <div className="flex flex-col items-start ml-8">
+    <div className="flex flex-col items-start ml-0 md:ml-8">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-secondary/80 border border-border text-text-muted text-[12px] hover:text-text hover:border-border hover:bg-bg-secondary transition-all cursor-pointer select-none"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-secondary/80 border border-border text-text-muted text-[12px] hover:text-text hover:border-border hover:bg-bg-secondary transition-all cursor-pointer select-none max-w-full"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-50">
           <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
         </svg>
-        <span className="truncate max-w-[400px]">{summary}</span>
+        <span className="truncate max-w-[60vw] md:max-w-[400px]">{summary}</span>
         <svg
           width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
           className={`shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
@@ -225,7 +225,7 @@ interface StreamingToolGroupProps {
 
 export function StreamingToolGroup({ tools }: StreamingToolGroupProps) {
   return (
-    <div className="flex flex-col items-start ml-8 gap-1">
+    <div className="flex flex-col items-start ml-0 md:ml-8 gap-1">
       {tools.map((tool) => (
         <div
           key={tool.id}
@@ -252,7 +252,7 @@ export function ThinkingIndicator() {
         <AliceAvatar />
         <span className="text-[12px] text-text-muted font-medium">Alice</span>
       </div>
-      <div className="text-text-muted ml-8">
+      <div className="text-text-muted ml-0 md:ml-8">
         <div className="flex">
           <span className="thinking-dot">.</span>
           <span className="thinking-dot">.</span>

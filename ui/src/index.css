@@ -96,14 +96,25 @@ body,
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: 6px;
-  padding: 12px;
+  padding: 8px;
   overflow-x: auto;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: 12px;
+}
+@media (min-width: 768px) {
+  .markdown-content pre {
+    padding: 12px;
+    font-size: 13px;
+  }
 }
 .markdown-content code {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 12px;
+}
+@media (min-width: 768px) {
+  .markdown-content code {
+    font-size: 13px;
+  }
 }
 .markdown-content :not(pre) > code {
   background: var(--color-bg-tertiary);
@@ -125,6 +136,8 @@ body,
   border-collapse: collapse;
   margin: 8px 0;
   width: 100%;
+  display: block;
+  overflow-x: auto;
 }
 .markdown-content th,
 .markdown-content td {
@@ -222,6 +235,19 @@ body,
   animation: pageFadeIn 150ms ease-out;
 }
 
+/* Bottom sheet slide-up (mobile trading panel) */
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.animate-slide-up {
+  animation: slideUp 250ms ease-out;
+}
+
 /* Code block wrapper for copy button */
 .code-block-wrapper {
   position: relative;
@@ -234,10 +260,16 @@ body,
   border: 1px solid var(--color-border);
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  padding: 4px 8px 4px 12px;
-  font-size: 12px;
+  padding: 4px 6px 4px 8px;
+  font-size: 11px;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
+}
+@media (min-width: 768px) {
+  .code-block-wrapper .code-header {
+    padding: 4px 8px 4px 12px;
+    font-size: 12px;
+  }
 }
 .code-block-wrapper .code-copy-btn {
   display: flex;
