@@ -298,51 +298,48 @@ export function createDashboardRoutes(ctx: EngineContext) {
     }
   })
 
-  // GDELT recent articles — financial & geopolitical topics
+  // GDELT recent articles — from feeds.timfinn.dev Atom feeds (cached by pliny feed-server)
   app.get('/gdelt', async (c) => {
     const topic = c.req.query('topic') ?? 'financial'
     const limit = Number(c.req.query('limit')) || 10
 
-    const TOPIC_QUERIES: Record<string, string> = {
-      financial: '"federal reserve" OR "interest rates" OR "bank failure" OR "economic recession" OR "inflation data"',
-      geopolitical: 'geopolitics OR sanctions OR "trade war" OR "diplomatic crisis" OR "border conflict"',
-      energy: '"oil price" OR OPEC OR "natural gas" OR "energy crisis" OR "energy sanctions"',
+    const TOPIC_SLUGS: Record<string, string> = {
+      financial: 'financial-economic',
+      geopolitical: 'geopolitics-foreign-policy',
+      energy: 'defense-space-industry',
+      cyber: 'cybersecurity-threat-intelligence',
     }
 
-    const query = TOPIC_QUERIES[topic] ?? TOPIC_QUERIES.financial
+    const slug = TOPIC_SLUGS[topic] ?? TOPIC_SLUGS.financial
 
     try {
-      const params = new URLSearchParams({
-        query,
-        mode: 'ArtList',
-        maxrecords: String(limit),
-        format: 'json',
-        sort: 'DateDesc',
-        timespan: '24h',
-      })
-
-      const res = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params}`, {
+      const res = await fetch(`https://feeds.timfinn.dev/feed/${slug}.xml`, {
         signal: AbortSignal.timeout(FETCH_TIMEOUT),
       })
-      if (!res.ok) return c.json({ articles: [], error: `GDELT: ${res.status}` })
+      if (!res.ok) return c.json({ topic, articles: [], error: `Feed server: ${res.status}` })
 
-      const data = await res.json() as { articles?: Array<{ title: string; url: string; domain: string; seendate: string; sourcecountry: string }> }
-      const articles = (data.articles ?? []).map(a => ({
-        title: a.title,
-        source: a.domain,
-        country: a.sourcecountry,
-        time: a.seendate,
-        url: a.url,
-      }))
+      const xml = await res.text()
+
+      // Simple Atom XML parsing — extract <entry> elements
+      const entries = xml.split('<entry>').slice(1)
+      const articles = entries.slice(0, limit).map(entry => {
+        const title = entry.match(/<title>(.*?)<\/title>/)?.[1] ?? ''
+        const url = entry.match(/<link href="(.*?)"/)?.[1] ?? ''
+        const source = entry.match(/<name>(.*?)<\/name>/)?.[1] ?? ''
+        const time = entry.match(/<published>(.*?)<\/published>/)?.[1] ?? ''
+        return { title, source, country: '', time, url }
+      }).filter(a => a.title)
 
       return c.json({ topic, articles })
     } catch (err) {
-      return c.json({ articles: [], error: err instanceof Error ? err.message : String(err) })
+      return c.json({ topic, articles: [], error: err instanceof Error ? err.message : String(err) })
     }
   })
 
-  // Economy indicators — key FRED series
+  // Economy indicators — key FRED series via direct FRED API
   app.get('/economy-strip', async (c) => {
+    const fredKey = ctx.config?.marketData?.providerKeys?.fred ?? ''
+
     const SERIES: Array<{ id: string; label: string; suffix?: string }> = [
       { id: 'DGS10', label: '10Y Yield', suffix: '%' },
       { id: 'DGS2', label: '2Y Yield', suffix: '%' },
@@ -350,21 +347,23 @@ export function createDashboardRoutes(ctx: EngineContext) {
       { id: 'T10Y2Y', label: '10Y-2Y Spread', suffix: '%' },
     ]
 
+    if (!fredKey) {
+      return c.json({ indicators: SERIES.map(s => ({ label: s.label, value: null })) })
+    }
+
     const results: Array<{ label: string; value: string | null }> = []
 
     await Promise.all(SERIES.map(async (s) => {
       try {
-        const url = `${OPENBB_BASE}/api/v1/economy/fred_series?symbol=${s.id}&provider=federal_reserve&limit=5`
-        const res = await fetch(url, {
-          signal: AbortSignal.timeout(FETCH_TIMEOUT),
-          headers: { 'X-OpenBB-Credentials': JSON.stringify({ api_key: ctx.config?.marketData?.providerKeys?.fred ?? '' }) },
-        })
+        const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${s.id}&api_key=${fredKey}&file_type=json&sort_order=desc&limit=1`
+        const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT) })
         if (!res.ok) { results.push({ label: s.label, value: null }); return }
-        const data = await res.json() as { results?: Array<{ value?: number }> }
-        const latest = data.results?.filter(d => d.value != null).pop()
+        const data = await res.json() as { observations?: Array<{ value?: string }> }
+        const latest = data.observations?.[0]
+        const val = latest?.value != null && latest.value !== '.' ? parseFloat(latest.value) : null
         results.push({
           label: s.label,
-          value: latest?.value != null ? `${latest.value.toFixed(2)}${s.suffix ?? ''}` : null,
+          value: val != null ? `${val.toFixed(2)}${s.suffix ?? ''}` : null,
         })
       } catch {
         results.push({ label: s.label, value: null })
