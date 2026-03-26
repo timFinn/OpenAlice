@@ -23,7 +23,7 @@ export type { Connector, SendPayload, SendResult, ConnectorCapabilities } from '
 export interface NotifyOpts {
   kind?: 'message' | 'notification'
   media?: MediaAttachment[]
-  source?: 'heartbeat' | 'cron' | 'manual'
+  source?: 'heartbeat' | 'cron' | 'manual' | 'signal-router'
 }
 
 /** Result of a notify() call. */

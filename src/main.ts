@@ -45,6 +45,7 @@ import { createEventLog } from './core/event-log.js'
 import { createToolCallLog } from './core/tool-call-log.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
 import { createHeartbeat } from './task/heartbeat/index.js'
+import { createSignalRouter, createAllSignals, DEFAULT_SIGNAL_ROUTER_CONFIG } from './task/signal-router/index.js'
 import { NewsCollectorStore, NewsCollector } from './domain/news/index.js'
 import { createNewsArchiveTools } from './tool/news.js'
 
@@ -264,6 +265,16 @@ async function main() {
   if (config.heartbeat.enabled) {
     console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
   }
+
+  // ==================== Signal Router ====================
+
+  const signalRouterConfig = { ...DEFAULT_SIGNAL_ROUTER_CONFIG, enabled: true }
+  const signalRouter = createSignalRouter({
+    config: signalRouterConfig,
+    signals: createAllSignals(equityClient),
+    connectorCenter, cronEngine, eventLog, agentCenter,
+  })
+  await signalRouter.start()
 
   // ==================== News Collector ====================
 
