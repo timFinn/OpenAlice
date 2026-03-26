@@ -273,7 +273,24 @@ async function main() {
   const signalRouterConfig = { ...DEFAULT_SIGNAL_ROUTER_CONFIG, enabled: true }
   const signalRouter = createSignalRouter({
     config: signalRouterConfig,
-    signals: createAllSignals(equityClient),
+    signals: createAllSignals({
+      equityClient,
+      newsProvider: newsStore,
+      watchSymbols: async () => {
+        const symbols: string[] = []
+        for (const acc of accountManager.listAccounts()) {
+          const uta = accountManager.get(acc.id)
+          if (!uta) continue
+          try {
+            const state = await uta.getState()
+            for (const p of state.positions) {
+              if (p.contract?.symbol) symbols.push(p.contract.symbol)
+            }
+          } catch { /* best effort */ }
+        }
+        return [...new Set(symbols)]
+      },
+    }),
     connectorCenter, cronEngine, eventLog, agentCenter,
   })
   await signalRouter.start()
