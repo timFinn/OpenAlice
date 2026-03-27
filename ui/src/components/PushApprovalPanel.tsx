@@ -83,7 +83,206 @@ function statusColor(status: string): string {
   }
 }
 
-// ==================== Component ====================
+// ==================== Inner content (shared between desktop & mobile) ====================
+
+interface ContentProps {
+  staged: StagedAccount[]
+  pending: PendingAccount[]
+  history: AccountHistory[]
+  pushing: string | null
+  rejecting: string | null
+  confirmingPush: string | null
+  lastResult: { accountId: string; data: WalletPushResult } | null
+  error: string | null
+  onPush: (accountId: string) => void
+  onReject: (accountId: string) => void
+  onConfirmPush: (accountId: string | null) => void
+  onClearResult: () => void
+  onClearError: () => void
+}
+
+function PanelContent({
+  staged, pending, history, pushing, rejecting, confirmingPush,
+  lastResult, error, onPush, onReject, onConfirmPush, onClearResult, onClearError,
+}: ContentProps) {
+  const hasStaged = staged.length > 0
+  const hasPending = pending.length > 0
+  const hasHistory = history.length > 0
+
+  return (
+    <>
+      {/* Staged (uncommitted) */}
+      {hasStaged && (
+        <div className="px-3 py-3 space-y-3">
+          {staged.map(({ account, status }) => (
+            <div key={account.id} className="space-y-2">
+              <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">
+                {account.label || account.id}
+              </div>
+              <div className="text-xs text-yellow-400/80 font-medium px-2 py-1.5 rounded bg-yellow-400/5 border border-yellow-400/20">
+                Staged — waiting for AI to commit
+              </div>
+              <div className="space-y-0.5">
+                {status.staged.map((op, i) => {
+                  const { text, side } = formatOp(op)
+                  return (
+                    <div
+                      key={i}
+                      className={`text-xs font-mono px-2 py-1 rounded bg-bg/50 ${
+                        side === 'buy' ? 'text-green-400' : side === 'sell' ? 'text-red-400' : 'text-text-muted'
+                      }`}
+                    >
+                      {text}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Pending (awaiting approval) */}
+      {hasPending ? (
+        <div className="px-3 py-3 space-y-3">
+          {pending.map(({ account, status }) => (
+            <div key={account.id} className="space-y-2">
+              <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">
+                {account.label || account.id}
+              </div>
+              <div className="text-xs text-text font-medium px-2 py-1.5 rounded bg-bg-secondary border border-border">
+                {status.pendingMessage}
+              </div>
+              <div className="space-y-0.5">
+                {status.staged.map((op, i) => {
+                  const { text, side } = formatOp(op)
+                  return (
+                    <div
+                      key={i}
+                      className={`text-xs font-mono px-2 py-1 rounded bg-bg/50 ${
+                        side === 'buy' ? 'text-green-400' : side === 'sell' ? 'text-red-400' : 'text-text-muted'
+                      }`}
+                    >
+                      {text}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {confirmingPush === account.id ? (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-text-muted">Execute {status.staged.length} op{status.staged.length > 1 ? 's' : ''}?</span>
+                  <button
+                    onClick={() => onPush(account.id)}
+                    disabled={pushing !== null}
+                    className="btn-primary-sm"
+                  >
+                    {pushing === account.id ? '...' : 'Confirm'}
+                  </button>
+                  <button
+                    onClick={() => onConfirmPush(null)}
+                    className="px-2 py-1 rounded text-text-muted hover:text-text transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onConfirmPush(account.id)}
+                    disabled={pushing !== null || rejecting !== null}
+                    className="flex-1 btn-primary-sm"
+                  >
+                    Approve & Push
+                  </button>
+                  <button
+                    onClick={() => onReject(account.id)}
+                    disabled={pushing !== null || rejecting !== null}
+                    className="text-xs px-3 py-1.5 rounded font-medium border border-border text-text-muted hover:text-red-400 hover:border-red-400/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {rejecting === account.id ? '...' : 'Reject'}
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {lastResult && (
+            <div className="space-y-1 pt-2 border-t border-border">
+              <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider">Last push</div>
+              <div className="text-xs text-text">
+                {lastResult.data.submitted.length > 0 && (
+                  <span className="text-green-400">{lastResult.data.submitted.length} submitted</span>
+                )}
+                {lastResult.data.rejected.length > 0 && (
+                  <>
+                    {lastResult.data.submitted.length > 0 && ', '}
+                    <span className="text-red-400">{lastResult.data.rejected.length} rejected</span>
+                  </>
+                )}
+              </div>
+              {lastResult.data.rejected.map((r, i) => (
+                <div key={i} className="text-xs text-red-400/80 px-2">{r.error || 'Unknown error'}</div>
+              ))}
+              <button onClick={onClearResult} className="text-[11px] text-text-muted hover:text-text">
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {error && (
+            <div className="text-xs text-red-400 pt-2 border-t border-border">
+              {error}
+              <button onClick={onClearError} className="ml-2 text-text-muted hover:text-text">Dismiss</button>
+            </div>
+          )}
+        </div>
+      ) : !hasStaged ? (
+        <div className="px-3 py-4 text-xs text-text-muted text-center">
+          No pending operations
+        </div>
+      ) : null}
+
+      {/* History */}
+      {hasHistory && (
+        <div className="border-t border-border">
+          <div className="px-3 py-2">
+            <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">History</div>
+          </div>
+          <div className="px-3 pb-3 space-y-3">
+            {history.map(({ accountId, label, commits }) => (
+              <div key={accountId} className="space-y-1">
+                {history.length > 1 && (
+                  <div className="text-[10px] text-text-muted/60 font-medium uppercase tracking-wider">{label}</div>
+                )}
+                {commits.map((commit) => (
+                  <div key={commit.hash} className="group px-2 py-1.5 rounded hover:bg-bg-secondary/50 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-text-muted/50">{commit.hash}</span>
+                      <span className="text-[10px] text-text-muted/40">{timeAgo(commit.timestamp)}</span>
+                    </div>
+                    <div className="text-xs text-text mt-0.5 leading-snug">{commit.message}</div>
+                    {commit.operations.length > 0 && (
+                      <div className="flex flex-wrap gap-x-2 mt-0.5">
+                        {commit.operations.map((op, i) => (
+                          <span key={i} className={`text-[10px] ${statusColor(op.status)}`}>
+                            {op.symbol !== 'unknown' ? op.symbol : op.action} · {op.status}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ==================== Main component ====================
 
 export function PushApprovalPanel() {
   const [accounts, setAccounts] = useState<TradingAccount[]>([])
@@ -95,6 +294,7 @@ export function PushApprovalPanel() {
   const [confirmingPush, setConfirmingPush] = useState<string | null>(null)
   const [lastResult, setLastResult] = useState<{ accountId: string; data: WalletPushResult } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   const poll = useCallback(async () => {
     try {
@@ -168,201 +368,73 @@ export function PushApprovalPanel() {
 
   const hasStaged = staged.length > 0
   const hasPending = pending.length > 0
-  const hasHistory = history.length > 0
+  const totalPending = staged.reduce((n, s) => n + s.status.staged.length, 0)
+    + pending.reduce((n, p) => n + p.status.staged.length, 0)
+
+  const contentProps: ContentProps = {
+    staged, pending, history, pushing, rejecting, confirmingPush,
+    lastResult, error,
+    onPush: handlePush,
+    onReject: handleReject,
+    onConfirmPush: setConfirmingPush,
+    onClearResult: () => setLastResult(null),
+    onClearError: () => setError(null),
+  }
 
   return (
-    <div className="w-72 shrink-0 border-l border-border bg-bg-secondary/30 flex flex-col min-h-0">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-text-muted">
-          <path d="M12 20V10M18 20V4M6 20v-4" />
-        </svg>
-        <h3 className="text-sm font-semibold text-text">Trading</h3>
-        {hasPending && (
-          <span className="ml-auto w-2 h-2 rounded-full bg-accent animate-pulse" title="Pending operations" />
-        )}
-        {!hasPending && hasStaged && (
-          <span className="ml-auto w-2 h-2 rounded-full bg-yellow-400 animate-pulse" title="Staged (uncommitted)" />
-        )}
-      </div>
+    <>
+      {/* Mobile: floating badge when there are actionable items */}
+      {(hasStaged || hasPending) && (
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="md:hidden fixed bottom-24 right-4 z-40 w-12 h-12 rounded-full bg-bg-secondary border border-border shadow-lg flex items-center justify-center transition-all active:scale-95"
+          aria-label={`${totalPending} pending trade${totalPending !== 1 ? 's' : ''}`}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-text-muted">
+            <path d="M12 20V10M18 20V4M6 20v-4" />
+          </svg>
+          <span className="absolute -top-1 -right-1 min-w-[20px] h-[20px] rounded-full bg-accent text-white text-[11px] font-semibold flex items-center justify-center px-1">
+            {totalPending}
+          </span>
+        </button>
+      )}
 
-      <div className="flex-1 overflow-y-auto">
-        {/* ==================== Staged (uncommitted) Section ==================== */}
-        {hasStaged && (
-          <div className="px-3 py-3 space-y-3">
-            {staged.map(({ account, status }) => (
-              <div key={account.id} className="space-y-2">
-                <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">
-                  {account.label || account.id}
-                </div>
-
-                <div className="text-xs text-yellow-400/80 font-medium px-2 py-1.5 rounded bg-yellow-400/5 border border-yellow-400/20">
-                  Staged — waiting for AI to commit
-                </div>
-
-                <div className="space-y-0.5">
-                  {status.staged.map((op, i) => {
-                    const { text, side } = formatOp(op)
-                    return (
-                      <div
-                        key={i}
-                        className={`text-xs font-mono px-2 py-1 rounded bg-bg/50 ${
-                          side === 'buy' ? 'text-green-400' : side === 'sell' ? 'text-red-400' : 'text-text-muted'
-                        }`}
-                      >
-                        {text}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* ==================== Pending Section ==================== */}
-        {hasPending ? (
-          <div className="px-3 py-3 space-y-3">
-            {pending.map(({ account, status }) => (
-              <div key={account.id} className="space-y-2">
-                <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">
-                  {account.label || account.id}
-                </div>
-
-                {/* Commit message */}
-                <div className="text-xs text-text font-medium px-2 py-1.5 rounded bg-bg-secondary border border-border">
-                  {status.pendingMessage}
-                </div>
-
-                {/* Staged operations */}
-                <div className="space-y-0.5">
-                  {status.staged.map((op, i) => {
-                    const { text, side } = formatOp(op)
-                    return (
-                      <div
-                        key={i}
-                        className={`text-xs font-mono px-2 py-1 rounded bg-bg/50 ${
-                          side === 'buy' ? 'text-green-400' : side === 'sell' ? 'text-red-400' : 'text-text-muted'
-                        }`}
-                      >
-                        {text}
-                      </div>
-                    )
-                  })}
-                </div>
-
-                {/* Inline confirm or action buttons */}
-                {confirmingPush === account.id ? (
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-text-muted">Execute {status.staged.length} op{status.staged.length > 1 ? 's' : ''}?</span>
-                    <button
-                      onClick={() => handlePush(account.id)}
-                      disabled={pushing !== null}
-                      className="btn-primary-sm"
-                    >
-                      {pushing === account.id ? '...' : 'Confirm'}
-                    </button>
-                    <button
-                      onClick={() => setConfirmingPush(null)}
-                      className="px-2 py-1 rounded text-text-muted hover:text-text transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setConfirmingPush(account.id)}
-                      disabled={pushing !== null || rejecting !== null}
-                      className="flex-1 btn-primary-sm"
-                    >
-                      Approve & Push
-                    </button>
-                    <button
-                      onClick={() => handleReject(account.id)}
-                      disabled={pushing !== null || rejecting !== null}
-                      className="text-xs px-3 py-1.5 rounded font-medium border border-border text-text-muted hover:text-red-400 hover:border-red-400/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {rejecting === account.id ? '...' : 'Reject'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {/* Last push result feedback */}
-            {lastResult && (
-              <div className="space-y-1 pt-2 border-t border-border">
-                <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider">Last push</div>
-                <div className="text-xs text-text">
-                  {lastResult.data.submitted.length > 0 && (
-                    <span className="text-green-400">{lastResult.data.submitted.length} submitted</span>
-                  )}
-                  {lastResult.data.rejected.length > 0 && (
-                    <>
-                      {lastResult.data.submitted.length > 0 && ', '}
-                      <span className="text-red-400">{lastResult.data.rejected.length} rejected</span>
-                    </>
-                  )}
-                </div>
-                {lastResult.data.rejected.map((r, i) => (
-                  <div key={i} className="text-xs text-red-400/80 px-2">{r.error || 'Unknown error'}</div>
-                ))}
-                <button onClick={() => setLastResult(null)} className="text-[11px] text-text-muted hover:text-text">
-                  Dismiss
-                </button>
-              </div>
-            )}
-
-            {error && (
-              <div className="text-xs text-red-400 pt-2 border-t border-border">
-                {error}
-                <button onClick={() => setError(null)} className="ml-2 text-text-muted hover:text-text">Dismiss</button>
-              </div>
-            )}
-          </div>
-        ) : !hasStaged ? (
-          <div className="px-3 py-4 text-xs text-text-muted text-center">
-            No pending operations
-          </div>
-        ) : null}
-
-        {/* ==================== History Section ==================== */}
-        {hasHistory && (
-          <div className="border-t border-border">
-            <div className="px-3 py-2">
-              <div className="text-[11px] text-text-muted font-medium uppercase tracking-wider">History</div>
+      {/* Mobile: bottom sheet */}
+      {mobileOpen && (
+        <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
+          <div className="relative bg-bg border-t border-border rounded-t-2xl max-h-[70vh] flex flex-col animate-slide-up">
+            <div className="flex justify-center py-2 shrink-0">
+              <div className="w-10 h-1 rounded-full bg-border" />
             </div>
-            <div className="px-3 pb-3 space-y-3">
-              {history.map(({ accountId, label, commits }) => (
-                <div key={accountId} className="space-y-1">
-                  {history.length > 1 && (
-                    <div className="text-[10px] text-text-muted/60 font-medium uppercase tracking-wider">{label}</div>
-                  )}
-                  {commits.map((commit) => (
-                    <div key={commit.hash} className="group px-2 py-1.5 rounded hover:bg-bg-secondary/50 transition-colors">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono text-text-muted/50">{commit.hash}</span>
-                        <span className="text-[10px] text-text-muted/40">{timeAgo(commit.timestamp)}</span>
-                      </div>
-                      <div className="text-xs text-text mt-0.5 leading-snug">{commit.message}</div>
-                      {commit.operations.length > 0 && (
-                        <div className="flex flex-wrap gap-x-2 mt-0.5">
-                          {commit.operations.map((op, i) => (
-                            <span key={i} className={`text-[10px] ${statusColor(op.status)}`}>
-                              {op.symbol !== 'unknown' ? op.symbol : op.action} · {op.status}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ))}
+            <div className="px-1 pb-2 shrink-0">
+              <h3 className="text-sm font-semibold text-text text-center">Trading</h3>
+            </div>
+            <div className="overflow-y-auto flex-1 min-h-0">
+              <PanelContent {...contentProps} />
             </div>
           </div>
-        )}
+        </div>
+      )}
+
+      {/* Desktop: side panel */}
+      <div className="hidden md:flex w-72 shrink-0 border-l border-border bg-bg-secondary/30 flex-col min-h-0">
+        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-text-muted">
+            <path d="M12 20V10M18 20V4M6 20v-4" />
+          </svg>
+          <h3 className="text-sm font-semibold text-text">Trading</h3>
+          {hasPending && (
+            <span className="ml-auto w-2 h-2 rounded-full bg-accent animate-pulse" title="Pending operations" />
+          )}
+          {!hasPending && hasStaged && (
+            <span className="ml-auto w-2 h-2 rounded-full bg-yellow-400 animate-pulse" title="Staged (uncommitted)" />
+          )}
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <PanelContent {...contentProps} />
+        </div>
       </div>
-    </div>
+    </>
   )
 }
