@@ -35,7 +35,7 @@ function tempPath(ext: string): string {
 }
 
 function makeSubmittedOrder(symbol = 'AAPL'): ReturnType<typeof makeOpenOrder> {
-  const contract = makeContract({ symbol, aliceId: `mock-${symbol}` })
+  const contract = makeContract({ symbol, aliceId: `mock-paper|${symbol}` })
   const order = new Order()
   order.orderId = 42
   order.action = 'BUY'
@@ -93,7 +93,7 @@ describe('Snapshot Builder', () => {
 
   // #3
   it('positions use aliceId, not full contract', async () => {
-    const pos = makePosition({ contract: makeContract({ symbol: 'TSLA', aliceId: 'mock-TSLA' }) })
+    const pos = makePosition({ contract: makeContract({ symbol: 'TSLA', aliceId: 'mock-paper|TSLA' }) })
     broker.setPositions([pos])
     const snap = await buildSnapshot(uta, 'manual')
     expect(snap).not.toBeNull()

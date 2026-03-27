@@ -10,7 +10,7 @@ import '../contract-ext.js'
 
 function makeContract(overrides: { aliceId?: string; symbol?: string } = {}): Contract {
   const c = new Contract()
-  c.aliceId = overrides.aliceId ?? 'mock-AAPL'
+  c.aliceId = overrides.aliceId ?? 'mock-paper|AAPL'
   c.symbol = overrides.symbol ?? 'AAPL'
   c.secType = 'STK'
   c.exchange = 'NASDAQ'
@@ -581,7 +581,7 @@ describe('TradingGit', () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' }),
+            contract: makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' }),
             side: 'long',
             quantity: new Decimal(10),
             avgCost: 150,
@@ -611,7 +611,7 @@ describe('TradingGit', () => {
       const stateWithPositions = makeGitState({
         positions: [
           {
-            contract: makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' }),
+            contract: makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' }),
             side: 'long',
             quantity: new Decimal(10),
             avgCost: 150,

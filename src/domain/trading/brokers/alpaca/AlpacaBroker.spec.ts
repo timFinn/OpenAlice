@@ -104,7 +104,7 @@ describe('AlpacaBroker — placeOrder()', () => {
       }),
     }
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
     contract.secType = 'STK'
     contract.exchange = 'NASDAQ'
@@ -148,7 +148,7 @@ describe('AlpacaBroker — precision', () => {
       createOrder: vi.fn().mockResolvedValue({ id: 'ord-p', status: 'new' }),
     }
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
     contract.secType = 'STK'
     contract.exchange = 'NASDAQ'
@@ -199,7 +199,7 @@ describe('AlpacaBroker — getContractDetails()', () => {
   it('returns ContractDetails for a valid symbol', async () => {
     const acc = new AlpacaBroker({ apiKey: 'k', secretKey: 's', paper: true })
     const query = new Contract()
-    query.aliceId = 'alpaca-AAPL'
+    query.aliceId = 'alpaca-paper|AAPL'
     query.symbol = 'AAPL'
 
     const details = await acc.getContractDetails(query)
@@ -312,7 +312,7 @@ describe('AlpacaBroker — closePosition()', () => {
     }
 
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const result = await acc.closePosition(contract)
@@ -341,7 +341,7 @@ describe('AlpacaBroker — closePosition()', () => {
     }
 
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const result = await acc.closePosition(contract, new Decimal(3))
@@ -532,7 +532,7 @@ describe('AlpacaBroker — getQuote()', () => {
     }
 
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const quote = await acc.getQuote(contract)

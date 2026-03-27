@@ -6,7 +6,8 @@
  *
  * A) reqId-based: symbolSamples, contractDetails, accountSummary, tickSnapshot
  * B) orderId-based: openOrder, orderStatus (for placeOrder/cancelOrder)
- * C) Single-slot: accountDownload (updatePortfolio/updateAccountValue), openOrders batch
+ * C) Single-slot: openOrders batch, completedOrders batch
+ * D) Persistent subscription: account data (updatePortfolio/updateAccountValue) with cache
  */
 
 import Decimal from 'decimal.js'
@@ -35,7 +36,7 @@ import type {
 } from './ibkr-types.js'
 
 const DEFAULT_TIMEOUT_MS = 10_000
-const ACCOUNT_DOWNLOAD_TIMEOUT_MS = 20_000
+const ACCOUNT_READY_TIMEOUT_MS = 20_000
 
 export class RequestBridge extends DefaultEWrapper {
   // ---- State ----
@@ -55,24 +56,6 @@ export class RequestBridge extends DefaultEWrapper {
   private orderPending = new Map<number, PendingRequest<CollectedOpenOrder>>()
 
   // ---- Mode C: single-slot collectors ----
-  private accountDownload: {
-    positions: Array<{
-      contract: Contract
-      side: 'long' | 'short'
-      quantity: Decimal
-      avgCost: number
-      marketPrice: number
-      marketValue: number
-      unrealizedPnL: number
-      realizedPnL: number
-    }>
-    values: Map<string, string>
-    resolve: (result: AccountDownloadResult) => void
-    reject: (err: Error) => void
-    timer: ReturnType<typeof setTimeout>
-  } | null = null
-  private accountDownloadLock: Promise<AccountDownloadResult> | null = null
-
   private openOrdersCollector: {
     orders: CollectedOpenOrder[]
     resolve: (orders: CollectedOpenOrder[]) => void
@@ -86,6 +69,18 @@ export class RequestBridge extends DefaultEWrapper {
     reject: (err: Error) => void
     timer: ReturnType<typeof setTimeout>
   } | null = null
+
+  // ---- Mode D: persistent account subscription cache ----
+  private accountCache_: AccountDownloadResult | null = null
+  private accountCachePending_: {
+    positions: AccountDownloadResult['positions']
+    values: Map<string, string>
+  } | null = null
+  private accountReadyResolve_: (() => void) | null = null
+  private accountReadyReject_: ((err: Error) => void) | null = null
+  private accountReadyPromise_: Promise<void> | null = null
+  private accountSubscribed_ = false
+  private accountCode_: string | null = null
 
   // ---- Fill data cache (from orderStatus callbacks) ----
   private fillData_ = new Map<number, { filled: Decimal; avgFillPrice: number }>()
@@ -185,37 +180,6 @@ export class RequestBridge extends DefaultEWrapper {
 
   // ---- Mode C: single-slot requests ----
 
-  /** Request account download (positions + account values). Serial access via lock. */
-  async requestAccountDownload(acctCode: string, timeoutMs = ACCOUNT_DOWNLOAD_TIMEOUT_MS): Promise<AccountDownloadResult> {
-    // Queue behind any in-flight download
-    if (this.accountDownloadLock) {
-      await this.accountDownloadLock.catch(() => {})
-    }
-
-    const promise = new Promise<AccountDownloadResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.accountDownload = null
-        this.client_?.reqAccountUpdates(false, acctCode)
-        reject(new BrokerError('NETWORK', `Account download timed out after ${timeoutMs}ms`))
-      }, timeoutMs)
-
-      this.accountDownload = {
-        positions: [],
-        values: new Map(),
-        resolve,
-        reject,
-        timer,
-      }
-    })
-
-    this.accountDownloadLock = promise.finally(() => {
-      this.accountDownloadLock = null
-    })
-
-    this.client_!.reqAccountUpdates(true, acctCode)
-    return promise
-  }
-
   /** Request all open orders (batch collector). */
   requestOpenOrders(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CollectedOpenOrder[]> {
     return new Promise<CollectedOpenOrder[]>((resolve, reject) => {
@@ -258,6 +222,46 @@ export class RequestBridge extends DefaultEWrapper {
       this.currentTimePending = { resolve: resolve as (v: unknown) => void, reject, timer }
       this.client_!.reqCurrentTime()
     })
+  }
+
+  // ---- Mode D: persistent account subscription ----
+
+  /** Subscribe to account updates. Call once after connect. */
+  startAccountSubscription(acctCode: string): void {
+    if (this.accountSubscribed_) return
+    this.accountSubscribed_ = true
+    this.accountCode_ = acctCode
+    this.accountCachePending_ = { positions: [], values: new Map() }
+    this.accountReadyPromise_ = new Promise<void>((resolve, reject) => {
+      this.accountReadyResolve_ = resolve
+      this.accountReadyReject_ = reject
+    })
+    this.client_!.reqAccountUpdates(true, acctCode)
+  }
+
+  /** Wait for first account download to complete. */
+  async waitForAccountReady(timeoutMs = ACCOUNT_READY_TIMEOUT_MS): Promise<void> {
+    if (this.accountCache_) return
+    if (!this.accountReadyPromise_) {
+      throw new BrokerError('NETWORK', 'Account subscription not started')
+    }
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new BrokerError('NETWORK', `Initial account download timed out after ${timeoutMs}ms`)), timeoutMs),
+    )
+    await Promise.race([this.accountReadyPromise_, timeout])
+  }
+
+  /** Read the cached account data. Returns null if not yet loaded. */
+  getAccountCache(): AccountDownloadResult | null {
+    return this.accountCache_
+  }
+
+  /** Stop the account subscription. */
+  stopAccountSubscription(): void {
+    if (!this.accountSubscribed_ || !this.accountCode_) return
+    this.accountSubscribed_ = false
+    this.client_?.reqAccountUpdates(false, this.accountCode_)
+    this.accountCode_ = null
   }
 
   // ==================== Internal helpers ====================
@@ -321,11 +325,15 @@ export class RequestBridge extends DefaultEWrapper {
     }
     this.orderPending.clear()
 
-    if (this.accountDownload) {
-      clearTimeout(this.accountDownload.timer)
-      this.accountDownload.reject(error)
-      this.accountDownload = null
+    // Reject account subscription ready promise if still pending
+    if (this.accountReadyReject_) {
+      this.accountReadyReject_(error)
+      this.accountReadyResolve_ = null
+      this.accountReadyReject_ = null
     }
+    this.accountSubscribed_ = false
+    this.accountCache_ = null
+    this.accountCachePending_ = null
 
     if (this.openOrdersCollector) {
       clearTimeout(this.openOrdersCollector.timer)
@@ -433,7 +441,7 @@ export class RequestBridge extends DefaultEWrapper {
     this.resolveRequest(reqId, this.collectors.get(reqId) ?? new Map<string, string>())
   }
 
-  // ---- Account download (updatePortfolio + updateAccountValue) ----
+  // ---- Account subscription callbacks (persistent cache) ----
 
   override updatePortfolio(
     contract: Contract,
@@ -445,10 +453,10 @@ export class RequestBridge extends DefaultEWrapper {
     realizedPNL: number,
     _accountName: string,
   ): void {
-    if (!this.accountDownload) return
-    if (position.isZero()) return // no position
+    if (!this.accountCachePending_) return
+    if (position.isZero()) return
 
-    this.accountDownload.positions.push({
+    this.accountCachePending_.positions.push({
       contract,
       side: position.greaterThan(0) ? 'long' : 'short',
       quantity: position.abs(),
@@ -461,23 +469,27 @@ export class RequestBridge extends DefaultEWrapper {
   }
 
   override updateAccountValue(key: string, val: string, _currency: string, _accountName: string): void {
-    this.accountDownload?.values.set(key, val)
+    this.accountCachePending_?.values.set(key, val)
   }
 
   override accountDownloadEnd(_accountName: string): void {
-    if (!this.accountDownload) return
-    clearTimeout(this.accountDownload.timer)
+    if (!this.accountCachePending_) return
 
-    const result: AccountDownloadResult = {
-      values: this.accountDownload.values,
-      positions: this.accountDownload.positions,
+    // Swap pending buffer into cache (atomic replace)
+    this.accountCache_ = {
+      values: this.accountCachePending_.values,
+      positions: this.accountCachePending_.positions,
     }
 
-    this.accountDownload.resolve(result)
-    this.accountDownload = null
+    // Reset pending buffer for next batch
+    this.accountCachePending_ = { positions: [], values: new Map() }
 
-    // Unsubscribe
-    this.client_?.reqAccountUpdates(false, _accountName)
+    // Resolve the initial-load promise (first call only)
+    if (this.accountReadyResolve_) {
+      this.accountReadyResolve_()
+      this.accountReadyResolve_ = null
+      this.accountReadyReject_ = null
+    }
   }
 
   // ---- Market data snapshot ----

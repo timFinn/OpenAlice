@@ -118,7 +118,7 @@ describe('AlpacaBroker — fill + position (market hours)', () => {
 
   it('fetches AAPL quote with valid prices', async () => {
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const quote = await broker!.getQuote(contract)
@@ -131,7 +131,7 @@ describe('AlpacaBroker — fill + position (market hours)', () => {
 
   it('places market buy 1 AAPL → success with UUID orderId', async () => {
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
     contract.secType = 'STK'
 
@@ -151,7 +151,7 @@ describe('AlpacaBroker — fill + position (market hours)', () => {
 
   it('queries order by ID after place', async () => {
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
     contract.secType = 'STK'
 
@@ -187,7 +187,7 @@ describe('AlpacaBroker — fill + position (market hours)', () => {
 
   it('closes AAPL position', async () => {
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
 
     const result = await broker!.closePosition(contract)
@@ -197,7 +197,7 @@ describe('AlpacaBroker — fill + position (market hours)', () => {
 
   it('getOrders with known IDs', async () => {
     const contract = new Contract()
-    contract.aliceId = 'alpaca-AAPL'
+    contract.aliceId = 'alpaca-paper|AAPL'
     contract.symbol = 'AAPL'
     contract.secType = 'STK'
 

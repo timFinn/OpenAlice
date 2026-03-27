@@ -127,12 +127,12 @@ describe('AccountManager', () => {
     it('searches all accounts by default', async () => {
       const a1 = new MockBroker({ id: 'a1' })
       const desc1 = new ContractDescription()
-      desc1.contract = makeContract({ aliceId: 'a1-AAPL' })
+      desc1.contract = makeContract({ aliceId: 'a1|AAPL' })
       vi.spyOn(a1, 'searchContracts').mockResolvedValue([desc1])
 
       const a2 = new MockBroker({ id: 'a2' })
       const desc2 = new ContractDescription()
-      desc2.contract = makeContract({ aliceId: 'a2-AAPL' })
+      desc2.contract = makeContract({ aliceId: 'a2|AAPL' })
       vi.spyOn(a2, 'searchContracts').mockResolvedValue([desc2])
 
       manager.add(makeUta(a1))
@@ -145,12 +145,12 @@ describe('AccountManager', () => {
     it('scopes search to specific accountId', async () => {
       const a1 = new MockBroker({ id: 'a1' })
       const desc1 = new ContractDescription()
-      desc1.contract = makeContract({ aliceId: 'a1-AAPL' })
+      desc1.contract = makeContract({ aliceId: 'a1|AAPL' })
       vi.spyOn(a1, 'searchContracts').mockResolvedValue([desc1])
 
       const a2 = new MockBroker({ id: 'a2' })
       const desc2 = new ContractDescription()
-      desc2.contract = makeContract({ aliceId: 'a2-AAPL' })
+      desc2.contract = makeContract({ aliceId: 'a2|AAPL' })
       vi.spyOn(a2, 'searchContracts').mockResolvedValue([desc2])
 
       manager.add(makeUta(a1))

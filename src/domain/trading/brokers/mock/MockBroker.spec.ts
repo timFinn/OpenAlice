@@ -22,7 +22,7 @@ beforeEach(() => {
 
 describe('precision', () => {
   it('placeOrder quantity survives Decimal round-trip', async () => {
-    const contract = makeContract({ aliceId: 'mock-ETH', symbol: 'ETH' })
+    const contract = makeContract({ aliceId: 'mock-paper|ETH', symbol: 'ETH' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -36,7 +36,7 @@ describe('precision', () => {
   })
 
   it('position quantity matches placed order exactly', async () => {
-    const contract = makeContract({ aliceId: 'mock-ETH', symbol: 'ETH' })
+    const contract = makeContract({ aliceId: 'mock-paper|ETH', symbol: 'ETH' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -49,7 +49,7 @@ describe('precision', () => {
   })
 
   it('closePosition removes position completely', async () => {
-    const contract = makeContract({ aliceId: 'mock-ETH', symbol: 'ETH' })
+    const contract = makeContract({ aliceId: 'mock-paper|ETH', symbol: 'ETH' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -64,7 +64,7 @@ describe('precision', () => {
   })
 
   it('partial close leaves correct remainder via Decimal subtraction', async () => {
-    const contract = makeContract({ aliceId: 'mock-ETH', symbol: 'ETH' })
+    const contract = makeContract({ aliceId: 'mock-paper|ETH', symbol: 'ETH' })
     const buyOrder = new Order()
     buyOrder.action = 'BUY'
     buyOrder.orderType = 'MKT'
@@ -85,7 +85,7 @@ describe('precision', () => {
 describe('placeOrder', () => {
   it('market order returns submitted (fill confirmed via getOrder)', async () => {
     broker.setQuote('AAPL', 150)
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -102,7 +102,7 @@ describe('placeOrder', () => {
   })
 
   it('limit order stays submitted, no execution', async () => {
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'LMT'
@@ -118,7 +118,7 @@ describe('placeOrder', () => {
 
   it('creates position on buy', async () => {
     broker.setQuote('AAPL', 150)
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -134,7 +134,7 @@ describe('placeOrder', () => {
 
   it('updates existing position on additional buy (avg cost recalc)', async () => {
     broker.setQuote('AAPL', 150)
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
 
     const order1 = new Order()
     order1.action = 'BUY'
@@ -162,7 +162,7 @@ describe('placeOrder', () => {
 describe('closePosition', () => {
   it('closes full position', async () => {
     broker.setQuote('AAPL', 150)
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -178,7 +178,7 @@ describe('closePosition', () => {
 
   it('partial close reduces quantity', async () => {
     broker.setQuote('AAPL', 150)
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -193,7 +193,7 @@ describe('closePosition', () => {
   })
 
   it('returns error when no position', async () => {
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const result = await broker.closePosition(contract)
     expect(result.success).toBe(false)
     expect(result.error).toContain('No open position')
@@ -204,7 +204,7 @@ describe('closePosition', () => {
 
 describe('cancelOrder', () => {
   it('cancels pending order', async () => {
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'LMT'
@@ -232,7 +232,7 @@ describe('cancelOrder', () => {
 
 describe('modifyOrder', () => {
   it('updates pending order qty/price', async () => {
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'LMT'
@@ -264,7 +264,7 @@ describe('modifyOrder', () => {
 
 describe('getOrder', () => {
   it('finds order by id', async () => {
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'LMT'
@@ -287,7 +287,7 @@ describe('getOrder', () => {
 
 describe('fillPendingOrder', () => {
   it('fills a pending limit order at specified price', async () => {
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'LMT'
@@ -319,7 +319,7 @@ describe('getAccount', () => {
 
   it('cash decreases after buy, equity includes unrealized PnL', async () => {
     broker.setQuote('AAPL', 150)
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -342,7 +342,7 @@ describe('getAccount', () => {
 
 describe('call tracking', () => {
   it('records method calls with args', async () => {
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     await broker.getQuote(contract)
     expect(broker.callCount('getQuote')).toBe(1)
     expect(broker.lastCall('getQuote')!.args[0]).toBe(contract)
@@ -350,7 +350,7 @@ describe('call tracking', () => {
 
   it('tracks multiple calls', async () => {
     broker.setQuote('AAPL', 150)
-    const contract = makeContract({ aliceId: 'mock-AAPL', symbol: 'AAPL' })
+    const contract = makeContract({ aliceId: 'mock-paper|AAPL', symbol: 'AAPL' })
     const order = new Order()
     order.action = 'BUY'
     order.orderType = 'MKT'
@@ -397,13 +397,13 @@ describe('accountInfo constructor option', () => {
 describe('factory helpers', () => {
   it('makeContract creates a contract with defaults', () => {
     const c = makeContract()
-    expect(c.aliceId).toBe('mock-AAPL')
+    expect(c.aliceId).toBe('mock-paper|AAPL')
     expect(c.symbol).toBe('AAPL')
   })
 
   it('makeContract accepts overrides', () => {
-    const c = makeContract({ aliceId: 'mock-ETH', symbol: 'ETH', secType: 'CRYPTO' })
-    expect(c.aliceId).toBe('mock-ETH')
+    const c = makeContract({ aliceId: 'mock-paper|ETH', symbol: 'ETH', secType: 'CRYPTO' })
+    expect(c.aliceId).toBe('mock-paper|ETH')
     expect(c.symbol).toBe('ETH')
     expect(c.secType).toBe('CRYPTO')
   })

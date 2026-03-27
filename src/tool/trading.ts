@@ -69,7 +69,7 @@ This is a BROKER-LEVEL search — it queries your connected trading accounts.`,
       inputSchema: z.object({
         source: z.string().describe(sourceDesc(true)),
         symbol: z.string().optional().describe('Symbol to look up'),
-        aliceId: z.string().optional().describe('Alice contract ID for exact match'),
+        aliceId: z.string().optional().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         secType: z.string().optional().describe('Security type filter'),
         currency: z.string().optional().describe('Currency filter'),
       }),
@@ -165,30 +165,22 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
     }),
 
     getQuote: tool({
-      description: `Query the latest quote/price for a contract. Use symbol for quick lookups, or aliceId from searchContracts for exact match.
+      description: `Query the latest quote/price for a contract.
 If this tool returns an error with transient=true, wait a few seconds and retry once before reporting to the user.`,
       inputSchema: z.object({
-        symbol: z.string().optional().describe('Ticker symbol (e.g. "AAPL"). Preferred for simple lookups.'),
-        aliceId: z.string().optional().describe('Contract identifier from searchContracts (e.g. "alpaca-paper-1|AAPL")'),
+        aliceId: z.string().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         source: z.string().optional().describe(sourceDesc(false)),
       }),
-      execute: async ({ symbol, aliceId, source }) => {
-        if (!symbol && !aliceId) return { error: 'Provide either symbol or aliceId.' }
+      execute: async ({ aliceId, source }) => {
         const targets = manager.resolve(source)
         if (targets.length === 0) return { error: 'No accounts available.' }
         const query = new Contract()
-        if (aliceId) {
-          query.aliceId = aliceId
-          // Extract nativeKey from aliceId format "utaId|nativeKey"
-          const sep = aliceId.indexOf('|')
-          if (sep !== -1) query.symbol = aliceId.slice(sep + 1)
-        }
-        if (symbol) query.symbol = symbol
+        query.aliceId = aliceId
         const results: Array<Record<string, unknown>> = []
         for (const uta of targets) {
           try { results.push({ source: uta.id, ...await uta.getQuote(query) }) } catch { /* skip */ }
         }
-        if (results.length === 0) return { error: `No account could quote ${symbol ?? aliceId}.` }
+        if (results.length === 0) return { error: `No account could quote aliceId "${aliceId}".` }
         return results.length === 1 ? results[0] : results
       },
     }),
@@ -276,7 +268,7 @@ BEFORE placing orders: check tradingLog, getPortfolio, verify strategy alignment
 NOTE: This stages the operation. Call tradingCommit + tradingPush to execute.`,
       inputSchema: z.object({
         source: z.string().describe(sourceDesc(true)),
-        aliceId: z.string().describe('Contract identifier from searchContracts'),
+        aliceId: z.string().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         symbol: z.string().optional().describe('Human-readable symbol. Optional.'),
         side: z.enum(['buy', 'sell']).describe('Buy or sell'),
         type: z.enum(['market', 'limit', 'stop', 'stop_limit', 'trailing_stop', 'trailing_stop_limit', 'moc']).describe('Order type'),
@@ -316,7 +308,7 @@ NOTE: This stages the operation. Call tradingCommit + tradingPush to execute.`,
       description: 'Stage a position close.\nNOTE: This stages the operation. Call tradingCommit + tradingPush to execute.',
       inputSchema: z.object({
         source: z.string().describe(sourceDesc(true)),
-        aliceId: z.string().describe('Contract identifier'),
+        aliceId: z.string().describe('Contract ID (format: accountId|nativeKey, from searchContracts)'),
         symbol: z.string().optional().describe('Human-readable symbol. Optional.'),
         qty: z.number().positive().optional().describe('Number of shares to sell (default: sell all)'),
       }),

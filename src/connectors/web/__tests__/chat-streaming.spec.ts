@@ -236,7 +236,7 @@ describe('Web UI chat streaming', () => {
     const provider = new FakeProvider([
       toolUseEvent('t1', 'getAccount', {}),
       toolResultEvent('t1', '{"cash": 100000}'),
-      toolUseEvent('t2', 'getQuote', { aliceId: 'alpaca-AAPL' }),
+      toolUseEvent('t2', 'getQuote', { aliceId: 'mock-paper|AAPL' }),
       toolResultEvent('t2', '{"last": 255.71}'),
       textEvent('Account has $100k, AAPL at $255.71'),
       doneEvent('Account has $100k, AAPL at $255.71'),

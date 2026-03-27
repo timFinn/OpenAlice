@@ -74,7 +74,7 @@ export const DEFAULT_CAPABILITIES: AccountCapabilities = {
 
 export function makeContract(overrides: Partial<Contract> & { aliceId?: string } = {}): Contract {
   const c = new Contract()
-  c.aliceId = overrides.aliceId ?? 'mock-AAPL'
+  c.aliceId = overrides.aliceId ?? 'mock-paper|AAPL'
   c.symbol = overrides.symbol ?? 'AAPL'
   c.secType = overrides.secType ?? 'STK'
   c.exchange = overrides.exchange ?? 'MOCK'
