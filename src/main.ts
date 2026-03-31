@@ -131,9 +131,13 @@ async function main() {
 
   const frontalLobe = brain.getFrontalLobe()
   const emotion = brain.getEmotion().current
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Chicago' })
   const instructions = [
     persona,
     '---',
+    `**Today is ${dateStr}.**`,
+    '',
     '## Current Brain State',
     '',
     `**Frontal Lobe:** ${frontalLobe || '(empty)'}`,

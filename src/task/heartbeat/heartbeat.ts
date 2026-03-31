@@ -129,8 +129,10 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
         return
       }
 
-      // 2. Call AI
-      const result = await agentCenter.askWithSession(payload.payload, session, {
+      // 2. Call AI (prepend current date/time so the model never relies on stale memory for today's date)
+      const dateNow = new Date()
+      const datePrefix = `[Current date: ${dateNow.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Chicago' })}, ${dateNow.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Chicago', hour12: true })} CT]\n\n`
+      const result = await agentCenter.askWithSession(datePrefix + payload.payload, session, {
         historyPreamble: 'The following is the recent heartbeat conversation history.',
       })
       const durationMs = now() - startMs

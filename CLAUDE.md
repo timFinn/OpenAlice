@@ -65,8 +65,9 @@ src/
 ├── plugins/
 │   └── mcp.ts                 # MCP protocol server
 ├── task/
-│   ├── cron/                  # Cron scheduling
-│   └── heartbeat/             # Periodic heartbeat
+│   ├── cron/                  # Cron scheduling (persisted in data/cron/jobs.json)
+│   ├── heartbeat/             # Periodic heartbeat (prompt in data/brain/heartbeat.md)
+│   └── signal-router/         # Event-driven signal triggers for autonomous trading
 ├── skills/                    # Agent skill definitions
 └── openclaw/                  # ⚠️ Frozen — DO NOT MODIFY
 ```
@@ -105,10 +106,28 @@ Centralized registry. `tool/` files register tools via `ToolCenter.register()`, 
 - `decimal.js` for financial math
 - Pino logger → `logs/engine.log`
 
+## Operational Notes
+
+### Config hot-reload behavior
+- **Heartbeat prompt** (`data/brain/heartbeat.md`): read each cycle — changes take effect immediately
+- **Heartbeat schedule** (`data/config/heartbeat.json`): read at startup, updates persisted cron job via `ensureJobAndListener()` — but verify `data/cron/jobs.json` matches after restart
+- **News feeds** (`data/config/news.json`): read once at startup — **requires service restart** to pick up new feeds
+- **Compaction** (`data/config/compaction.json`): read at startup
+
+### Cron persistence
+Cron jobs persist in `data/cron/jobs.json`. If config and persisted state diverge (e.g., heartbeat interval), the persisted job may win. When changing intervals, verify the persisted file matches after restart.
+
+### News collector
+- RSS feeds configured in `data/config/news.json`, fetched every 5 minutes
+- Dedup keys persist in `data/news-collector/news.jsonl` (rebuilt into memory on startup)
+- Sources include: direct RSS, RSSBridge (AP via CssSelectorBridge), pliny feed-server (Reuters via sitemap proxy, GDELT categories)
+- Feed-server at `feeds.timfinn.dev` requires K3s pod restart to pick up new code (image tag is `:latest`)
+
 ## Git Workflow
 
-- `origin` = `TraderAlice/OpenAlice` (production)
+- `origin` = `timFinn/OpenAlice` (fork), `upstream` = `TraderAlice/OpenAlice`
 - `dev` branch for all development, `master` only via PR
+- Sync upstream periodically: `git fetch upstream && git merge upstream/master` — resolve conflicts favoring fork customizations when intentional
 - **Never** force push master, **never** push `archive/dev` (contains old API keys)
 - CLAUDE.md is **committed to the repo and publicly visible** — never put API keys, personal paths, or sensitive information in it
 
