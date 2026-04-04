@@ -22,6 +22,7 @@ import {
   type Quote,
   type MarketClock,
   type BrokerConfigField,
+  type TpSlParams,
 } from '../types.js'
 import { QuoteCache } from '../../quote-cache.js'
 import '../../contract-ext.js'
@@ -34,6 +35,12 @@ import {
   marketToContract,
   contractToCcxt,
 } from './ccxt-contracts.js'
+import {
+  type CcxtExchangeOverrides,
+  exchangeOverrides,
+  defaultFetchOrderById,
+  defaultCancelOrderById,
+} from './overrides.js'
 
 /** Map IBKR orderType codes to CCXT order type strings. */
 function ibkrOrderTypeToCcxt(orderType: string): string {
@@ -100,12 +107,14 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   private supportsStreaming = false
   private readonly quoteCache = new QuoteCache()
   private readonly watchAborts = new Map<string, AbortController>()
+  private overrides: CcxtExchangeOverrides
   // orderId → ccxtSymbol cache (CCXT needs symbol to cancel)
   private orderSymbolCache = new Map<string, string>()
 
   constructor(config: CcxtBrokerConfig) {
     this.exchangeName = config.exchange
     this.meta = { exchange: config.exchange }
+    this.overrides = exchangeOverrides[config.exchange] ?? {}
     this.id = config.id ?? `${config.exchange}-main`
     this.label = config.label ?? `${config.exchange.charAt(0).toUpperCase() + config.exchange.slice(1)} ${config.sandbox ? 'Testnet' : 'Live'}`
 
@@ -329,7 +338,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
   // ---- Trading operations ----
 
-  async placeOrder(contract: Contract, order: Order, extraParams?: Record<string, unknown>): Promise<PlaceOrderResult> {
+  async placeOrder(contract: Contract, order: Order, tpsl?: TpSlParams, extraParams?: Record<string, unknown>): Promise<PlaceOrderResult> {
     this.ensureInit()
 
 
@@ -359,6 +368,16 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
     try {
       const params: Record<string, unknown> = { ...extraParams }
+
+      if (tpsl?.takeProfit) {
+        params.takeProfit = { triggerPrice: parseFloat(tpsl.takeProfit.price) }
+      }
+      if (tpsl?.stopLoss) {
+        params.stopLoss = {
+          triggerPrice: parseFloat(tpsl.stopLoss.price),
+          ...(tpsl.stopLoss.limitPrice && { price: parseFloat(tpsl.stopLoss.limitPrice) }),
+        }
+      }
 
       const ccxtOrderType = ibkrOrderTypeToCcxt(order.orderType)
       const side = order.action.toLowerCase() as 'buy' | 'sell'
@@ -392,7 +411,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
     try {
       const ccxtSymbol = this.orderSymbolCache.get(orderId)
-      await this.exchange.cancelOrder(orderId, ccxtSymbol)
+      const cancel = this.overrides.cancelOrderById ?? defaultCancelOrderById
+      await cancel(this.exchange, orderId, ccxtSymbol)
       const orderState = new OrderState()
       orderState.status = 'Cancelled'
       return { success: true, orderId, orderState }
@@ -410,10 +430,18 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         return { success: false, error: `Unknown order ${orderId} — cannot resolve symbol for edit` }
       }
 
-      // editOrder requires type and side — fetch the original order to fill in defaults
-      const original = await this.exchange.fetchOrder(orderId, ccxtSymbol)
+      // editOrder requires type and side — fetch the original order to fill in defaults.
+      const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
+      const original = await fetch(this.exchange, orderId, ccxtSymbol)
       const qty = changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL) ? parseFloat(changes.totalQuantity.toString()) : original.amount
-      const price = changes.lmtPrice !== UNSET_DOUBLE ? changes.lmtPrice : original.price
+      const price = changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE ? changes.lmtPrice : original.price
+
+      // Extra params for fields that don't fit editOrder's positional arguments
+      const params: Record<string, unknown> = {}
+      if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) params.stopPrice = changes.auxPrice
+      if (changes.trailStopPrice != null && changes.trailStopPrice !== UNSET_DOUBLE) params.trailStopPrice = changes.trailStopPrice
+      if (changes.trailingPercent != null && changes.trailingPercent !== UNSET_DOUBLE) params.trailingPercent = changes.trailingPercent
+      if (changes.tif) params.timeInForce = changes.tif.toLowerCase()
 
       const result = await this.exchange.editOrder(
         orderId,
@@ -422,6 +450,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         original.side,
         qty,
         price,
+        params,
       )
 
       return {
@@ -456,7 +485,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     order.orderType = 'MKT'
     order.totalQuantity = quantity ?? pos.quantity
 
-    return this.placeOrder(pos.contract, order, { reduceOnly: true })
+    return this.placeOrder(pos.contract, order, undefined, { reduceOnly: true })
   }
 
   // ---- Queries ----
@@ -566,22 +595,13 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   async getOrder(orderId: string): Promise<OpenOrder | null> {
     this.ensureInit()
 
-
     const ccxtSymbol = this.orderSymbolCache.get(orderId)
     if (!ccxtSymbol) return null
 
+    const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
     try {
-      // Use singular fetchOpenOrder / fetchClosedOrder — they query by orderId directly,
-      // instead of fetching a list and searching. Much more reliable on Bybit.
-      try {
-        const open = await (this.exchange as any).fetchOpenOrder(orderId, ccxtSymbol)
-        return this.convertCcxtOrder(open)
-      } catch { /* not an open order */ }
-      try {
-        const closed = await (this.exchange as any).fetchClosedOrder(orderId, ccxtSymbol)
-        return this.convertCcxtOrder(closed)
-      } catch { /* not found */ }
-      return null
+      const order = await fetch(this.exchange, orderId, ccxtSymbol)
+      return this.convertCcxtOrder(order)
     } catch {
       return null
     }
@@ -604,11 +624,21 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     if (o.price != null) order.lmtPrice = o.price
     order.orderId = parseInt(o.id, 10) || 0
 
+    const tp = o.takeProfitPrice
+    const sl = o.stopLossPrice
+    const tpsl: TpSlParams | undefined = (tp != null || sl != null)
+      ? {
+        ...(tp != null && { takeProfit: { price: String(tp) } }),
+        ...(sl != null && { stopLoss: { price: String(sl) } }),
+      }
+      : undefined
+
     return {
       contract,
       order,
       orderState: makeOrderState(o.status),
       nativeOrderId: o.id,
+      ...(tpsl && { tpsl }),
     }
   }
 

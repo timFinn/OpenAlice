@@ -101,10 +101,12 @@ const marketDataSchema = z.object({
     equity: z.string().default('yfinance'),
     crypto: z.string().default('yfinance'),
     currency: z.string().default('yfinance'),
+    commodity: z.string().default('yfinance'),
   }).default({
     equity: 'yfinance',
     crypto: 'yfinance',
     currency: 'yfinance',
+    commodity: 'yfinance',
   }),
   providerKeys: z.object({
     fred: z.string().optional(),

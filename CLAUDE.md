@@ -9,6 +9,7 @@ pnpm install
 pnpm dev        # Dev mode (tsx watch, port 3002)
 pnpm build      # Production build (backend + UI)
 pnpm test       # Vitest
+pnpm test:e2e   # e2e test
 ```
 
 ## Project Structure
@@ -138,3 +139,4 @@ Cron jobs persist in `data/cron/jobs.json`. If config and persisted state diverg
 - When merging PRs, **prefer `--merge` over `--squash`** — squash destroys individual commit history. If the PR has clean, meaningful commits, merge them as-is
 - If squash is needed (messy history), do it — but never combine with `--delete-branch`
 - `archive/dev-pre-beta6` is a historical snapshot — do not modify or delete
+- **After merging a PR**, always `git pull origin master` to sync local master. Stale local master causes confusion about what's merged and what's not.

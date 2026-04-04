@@ -1,3 +1,4 @@
+import type { QueryExecutor } from '@traderalice/opentypebb'
 import type { AccountManager } from '../domain/trading/index.js'
 import type { SnapshotService } from '../domain/trading/snapshot/index.js'
 import type { CronEngine } from '../task/cron/engine.js'
@@ -32,6 +33,9 @@ export interface EngineContext {
   heartbeat: Heartbeat
   cronEngine: CronEngine
   toolCenter: ToolCenter
+
+  // Market data
+  bbEngine: QueryExecutor
 
   // Trading (unified account model)
   accountManager: AccountManager
