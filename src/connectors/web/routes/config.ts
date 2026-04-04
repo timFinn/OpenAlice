@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { loadConfig, writeConfigSection, readAIProviderConfig, readMarketDataConfig, validSections, writeAIBackend, type ConfigSection, type AIBackend } from '../../../core/config.js'
+import { loadConfig, writeConfigSection, readAIProviderConfig, validSections, writeAIBackend, type ConfigSection, type AIBackend } from '../../../core/config.js'
+import type { EngineContext } from '../../../core/types.js'
 
 interface ConfigRouteOpts {
   onConnectorsChange?: () => Promise<void>
@@ -70,16 +71,16 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
 }
 
 /** Market data routes: POST /test-provider */
-export function createMarketDataRoutes() {
-  const TEST_ENDPOINTS: Record<string, { credField: string; path: string }> = {
-    fred:             { credField: 'fred_api_key',             path: '/api/v1/economy/fred_search?query=GDP&provider=fred' },
-    bls:              { credField: 'bls_api_key',              path: '/api/v1/economy/survey/bls_search?query=unemployment&provider=bls' },
-    eia:              { credField: 'eia_api_key',              path: '/api/v1/commodity/short_term_energy_outlook?provider=eia' },
-    econdb:           { credField: 'econdb_api_key',           path: '/api/v1/economy/available_indicators?provider=econdb' },
-    fmp:              { credField: 'fmp_api_key',              path: '/api/v1/equity/screener?provider=fmp&limit=1' },
-    nasdaq:           { credField: 'nasdaq_api_key',           path: '/api/v1/equity/search?query=AAPL&provider=nasdaq&is_symbol=true' },
-    intrinio:         { credField: 'intrinio_api_key',         path: '/api/v1/equity/search?query=AAPL&provider=intrinio&limit=1' },
-    tradingeconomics: { credField: 'tradingeconomics_api_key', path: '/api/v1/economy/calendar?provider=tradingeconomics' },
+export function createMarketDataRoutes(ctx: EngineContext) {
+  const TEST_ENDPOINTS: Record<string, { credField: string; provider: string; model: string; params: Record<string, unknown> }> = {
+    fred:             { credField: 'fred_api_key',             provider: 'fred',             model: 'FredSearch',              params: { query: 'GDP' } },
+    bls:              { credField: 'bls_api_key',              provider: 'bls',              model: 'BlsSearch',               params: { query: 'unemployment' } },
+    eia:              { credField: 'eia_api_key',              provider: 'eia',              model: 'ShortTermEnergyOutlook',  params: {} },
+    econdb:           { credField: 'econdb_api_key',           provider: 'econdb',           model: 'AvailableIndicators',     params: {} },
+    fmp:              { credField: 'fmp_api_key',              provider: 'fmp',              model: 'EquityScreener',          params: { limit: 1 } },
+    nasdaq:           { credField: 'nasdaq_api_key',           provider: 'nasdaq',           model: 'EquitySearch',            params: { query: 'AAPL', is_symbol: true } },
+    intrinio:         { credField: 'intrinio_api_key',         provider: 'intrinio',         model: 'EquitySearch',            params: { query: 'AAPL', limit: 1 } },
+    tradingeconomics: { credField: 'tradingeconomics_api_key', provider: 'tradingeconomics', model: 'EconomicCalendar',        params: {} },
   }
 
   const app = new Hono()
@@ -91,21 +92,16 @@ export function createMarketDataRoutes() {
       if (!endpoint) return c.json({ ok: false, error: `Unknown provider: ${provider}` }, 400)
       if (!key) return c.json({ ok: false, error: 'No API key provided' }, 400)
 
-      const marketDataConfig = await readMarketDataConfig()
-      const credHeader = JSON.stringify({ [endpoint.credField]: key })
-      const url = `${marketDataConfig.apiUrl}${endpoint.path}`
-
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(15_000),
-        headers: { 'X-OpenBB-Credentials': credHeader },
-      })
-
-      if (res.ok) return c.json({ ok: true })
-      const body = await res.text().catch(() => '')
-      return c.json({ ok: false, error: `OpenBB returned ${res.status}: ${body.slice(0, 200)}` })
+      const result = await ctx.bbEngine.execute(
+        endpoint.provider, endpoint.model, endpoint.params,
+        { [endpoint.credField]: key },
+      )
+      const data = result as unknown[]
+      if (data && data.length > 0) return c.json({ ok: true })
+      return c.json({ ok: false, error: 'API returned empty data — key may be invalid or endpoint restricted' })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      return c.json({ ok: false, error: msg.includes('timeout') ? 'Cannot reach OpenBB API' : msg })
+      return c.json({ ok: false, error: msg })
     }
   })
 

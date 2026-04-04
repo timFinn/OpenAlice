@@ -74,7 +74,7 @@ export class WebPlugin implements Plugin {
     app.route('/api/config', createConfigRoutes({
       onConnectorsChange: async () => { await ctx.reconnectConnectors() },
     }))
-    app.route('/api/market-data', createMarketDataRoutes())
+    app.route('/api/market-data', createMarketDataRoutes(ctx))
     app.route('/api/events', createEventsRoutes(ctx))
     app.route('/api/cron', createCronRoutes(ctx))
     app.route('/api/heartbeat', createHeartbeatRoutes(ctx))
