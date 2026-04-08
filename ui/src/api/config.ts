@@ -69,8 +69,12 @@ export const configApi = {
     }
   },
 
-  async testProfile(slug: string): Promise<{ ok: boolean; response?: string; error?: string }> {
-    const res = await fetch(`/api/config/profiles/${encodeURIComponent(slug)}/test`, { method: 'POST' })
+  async testProfile(profileData: Profile): Promise<{ ok: boolean; response?: string; error?: string }> {
+    const res = await fetch('/api/config/profiles/test', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(profileData),
+    })
     return res.json()
   },
 

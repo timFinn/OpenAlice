@@ -257,26 +257,34 @@ function ProfileCreateModal({ presets, existingNames, onSave, onClose }: {
     const validationError = validate()
     if (validationError) { setError(validationError); return }
 
-    setSaving(true); setError(''); setTestResult(null)
-    try {
-      const data = getSubmitData()
-      data.preset = selectedPreset.id
-      // Save profile
-      await onSave(trimmedName, data as unknown as Profile)
-      setSaving(false)
+    setError(''); setTestResult(null)
+    const data = getSubmitData()
+    data.preset = selectedPreset.id
+    const profileData = data as unknown as Profile
 
-      // Test connectivity
-      setTesting(true)
-      const result = await api.config.testProfile(trimmedName)
+    // Step 1: Test connectivity (before saving)
+    setTesting(true)
+    try {
+      const result = await api.config.testProfile(profileData)
       setTestResult(result)
       setTesting(false)
 
-      if (result.ok) {
-        setTimeout(onClose, 2000)
-      }
+      if (!result.ok) return // Don't save if test failed
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create')
-      setSaving(false); setTesting(false)
+      setTestResult({ ok: false, error: err instanceof Error ? err.message : 'Test failed' })
+      setTesting(false)
+      return
+    }
+
+    // Step 2: Save (test passed)
+    setSaving(true)
+    try {
+      await onSave(trimmedName, profileData)
+      setSaving(false)
+      setTimeout(onClose, 1500)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save')
+      setSaving(false)
     }
   }
 

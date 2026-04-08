@@ -64,8 +64,8 @@ export class CodexProvider implements AIProvider {
     return { client: new OpenAI({ apiKey: token, baseURL }), model }
   }
 
-  async ask(prompt: string): Promise<ProviderResult> {
-    const { client, model } = await this.createClient()
+  async ask(prompt: string, profile?: ResolvedProfile): Promise<ProviderResult> {
+    const { client, model } = await this.createClient(profile)
     const instructions = await this.getSystemPrompt()
 
     try {

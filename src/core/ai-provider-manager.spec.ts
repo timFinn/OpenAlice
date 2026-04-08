@@ -190,6 +190,6 @@ describe('GenerateRouter', () => {
     mockResolveProfile.mockResolvedValue({ backend: 'vercel-ai-sdk', model: 'x', provider: 'anthropic' })
     const result = await router.ask('test prompt')
     expect(result.text).toBe('from-vercel-ai')
-    expect(vercel.ask).toHaveBeenCalledWith('test prompt')
+    expect(vercel.ask).toHaveBeenCalledWith('test prompt', expect.objectContaining({ backend: 'vercel-ai-sdk' }))
   })
 })

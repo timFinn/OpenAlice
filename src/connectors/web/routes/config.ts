@@ -104,12 +104,13 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
 
   // ==================== Profile Test ====================
 
-  /** POST /profiles/:slug/test — test a saved profile by sending "Hi" to its provider */
-  app.post('/profiles/:slug/test', async (c) => {
+  /** POST /profiles/test — test profile config by sending "Hi" (without saving) */
+  app.post('/profiles/test', async (c) => {
     if (!opts?.ctx) return c.json({ ok: false, error: 'Test not available' }, 500)
     try {
-      const slug = c.req.param('slug')
-      const result = await opts.ctx.agentCenter.testProfile(slug)
+      const profileData = await c.req.json<Profile>()
+      const validated = profileSchema.parse(profileData)
+      const result = await opts.ctx.agentCenter.testWithProfile(validated, 'Hi')
       return c.json({ ok: true, response: result.text })
     } catch (err) {
       return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) })

@@ -13,6 +13,7 @@
  */
 
 import type { AskOptions, ProviderResult, ProviderEvent, GenerateOpts } from './ai-provider-manager.js'
+import type { ResolvedProfile } from './config.js'
 import { GenerateRouter, StreamableResult } from './ai-provider-manager.js'
 import type { ISessionStore, ContentBlock } from './session.js'
 import type { CompactionConfig } from './compaction.js'
@@ -58,10 +59,14 @@ export class AgentCenter {
     return this.router.ask(prompt)
   }
 
-  /** Test a profile by sending a prompt to its provider. Used for connection testing. */
+  /** Test a saved profile by sending a prompt to its provider. */
   async testProfile(profileSlug: string, prompt = 'Hi'): Promise<ProviderResult> {
-    const { provider } = await this.router.resolve(profileSlug)
-    return provider.ask(prompt)
+    return this.router.askWithProfileSlug(prompt, profileSlug)
+  }
+
+  /** Test an unsaved profile (inline data). Used for pre-save connection testing. */
+  async testWithProfile(profile: ResolvedProfile, prompt = 'Hi'): Promise<ProviderResult> {
+    return this.router.askWithProfile(prompt, profile)
   }
 
   /** Prompt with session history — full orchestration pipeline. */
