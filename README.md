@@ -59,6 +59,60 @@ An append-only event log sits at the center of Alice. All system activity — tr
 - **Evolution mode** — permission escalation that gives Alice full project access including Bash, enabling self-modification
 
 
+## Architecture
+
+Alice has four layers. Each layer only talks to the one directly above or below it.
+
+```mermaid
+graph TB
+  subgraph Interface["Interface — where users interact"]
+    WEB[Web UI]
+    TG[Telegram]
+    MCP[MCP Server]
+  end
+
+  subgraph Core["Core — orchestration & routing"]
+    AC[AgentCenter]
+    PR[ProviderRouter]
+    TC[ToolCenter]
+    EL[Event Log]
+    CCR[ConnectorCenter]
+  end
+
+  subgraph Domain["Domain — business logic"]
+    subgraph UTA["UTA (Trading)"]
+      TG2[Trading Git]
+      GD[Guards]
+      BK[Brokers]
+    end
+    MD[Market Data]
+    AN[Analysis]
+    NC[News]
+    BR[Brain]
+  end
+
+  subgraph Automation["Automation — scheduled & event-driven"]
+    CRON[Cron Engine]
+    HB[Heartbeat]
+  end
+
+  WEB & TG & MCP --> AC
+  AC --> PR
+  PR -->|Claude| AS[Agent SDK]
+  PR -->|Vercel| VS[Vercel AI SDK]
+  TC --> Domain
+  EL --> Automation
+  CCR --> Interface
+```
+
+**Interface** — external surfaces (Web UI, Telegram, MCP). Users and external agents connect here. ConnectorCenter tracks last-used channel for delivery routing.
+
+**Core** — AgentCenter routes all AI calls through ProviderRouter. ToolCenter is a shared registry — domain modules register tools there, and it exports them to whichever AI provider is active. EventLog is the central event bus.
+
+**Domain** — business logic. UTA is the trading workspace (see Key Concepts below). Market Data, Analysis, News, and Brain are independent modules, each exposed to AI through tool registrations.
+
+**Automation** — listeners on the EventLog bus. Cron fires scheduled jobs, Heartbeat is a special cron job for periodic market review.
+
 ## Key Concepts
 
 **UTA (Unified Trading Account)** — The core abstraction. Each UTA wraps a broker connection, operation history, guard pipeline, and snapshot scheduler into a single self-contained workspace. AI and the frontend interact with UTAs exclusively — brokers are internal implementation details. Multiple UTAs work like independent repositories: one for Alpaca US equities, one for Bybit crypto, each with its own history and guards.
@@ -72,85 +126,6 @@ An append-only event log sits at the center of Alice. All system activity — tr
 **Connector** — An external interface through which users interact with Alice. Built-in: Web UI, Telegram, MCP Ask. Delivery always goes to the channel you last spoke through.
 
 **AI Provider** — The AI backend that powers Alice. Claude (via Agent SDK, supports OAuth login or API key) or Vercel AI SDK (Anthropic, OpenAI, Google). Switchable at runtime — no restart needed.
-
-## Architecture
-
-```mermaid
-graph LR
-  subgraph Providers
-    AS[Claude / Agent SDK]
-    VS[Vercel AI SDK]
-  end
-
-  subgraph Core
-    PR[ProviderRouter]
-    AC[AgentCenter]
-    TC[ToolCenter]
-    S[Session Store]
-    EL[Event Log]
-    CCR[ConnectorCenter]
-  end
-
-  subgraph Domain
-    MD[Market Data]
-    AN[Analysis]
-    subgraph UTA[Unified Trading Account]
-      TR[Trading Git]
-      GD[Guards]
-      BK[Brokers]
-      SN[Snapshots]
-    end
-    NC[News Collector]
-    BR[Brain]
-    BW[Browser]
-  end
-
-  subgraph Tasks
-    CRON[Cron Engine]
-    HB[Heartbeat]
-  end
-
-  subgraph Interfaces
-    WEB[Web UI]
-    TG[Telegram]
-    MCP[MCP Server]
-  end
-
-  AS --> PR
-  VS --> PR
-  PR --> AC
-  AC --> S
-  TC -->|Vercel tools| VS
-  TC -->|in-process MCP| AS
-  TC -->|MCP tools| MCP
-  MD --> AN
-  MD --> NC
-  AN --> TC
-  GD --> TR
-  TR --> BK
-  UTA --> TC
-  NC --> TC
-  BR --> TC
-  BW --> TC
-  CRON --> EL
-  HB --> CRON
-  EL --> CRON
-  CCR --> WEB
-  CCR --> TG
-  WEB --> AC
-  TG --> AC
-  MCP --> AC
-```
-
-**Providers** — interchangeable AI backends. Claude (Agent SDK) uses `@anthropic-ai/claude-agent-sdk` with tools delivered via in-process MCP — supports Claude Pro/Max OAuth login or API key. Vercel AI SDK runs a `ToolLoopAgent` in-process with direct API calls. `ProviderRouter` reads `ai-provider.json` on each call to select the active backend at runtime.
-
-**Core** — `AgentCenter` is the top-level orchestration center that routes all calls (both stateless and session-aware) through `ProviderRouter`. `ToolCenter` is a centralized tool registry — `tool/` files register domain capabilities there, and it exports them in Vercel AI SDK and MCP formats. `EventLog` provides persistent append-only event storage (JSONL) with real-time subscriptions and crash recovery. `ConnectorCenter` tracks which channel the user last spoke through.
-
-**Domain** — business logic modules registered as AI tools via the `tool/` bridge layer. The trading domain centers on `UnifiedTradingAccount` (UTA) — each UTA bundles a broker connection, git-like operation history, guard pipeline, and snapshot scheduler into a single entity. Guards enforce pre-execution safety checks (position size limits, trade cooldowns, symbol whitelist) inside each UTA before orders reach the broker. Snapshots capture periodic account state for equity curve tracking. `NewsCollector` runs background RSS fetches into a persistent archive searchable by the agent.
-
-**Tasks** — scheduled background work. `CronEngine` manages jobs and fires `cron.fire` events into the EventLog on schedule; a listener picks them up, runs them through `AgentCenter`, and delivers replies via `ConnectorCenter`. `Heartbeat` is a periodic health-check that uses a structured response protocol (HEARTBEAT_OK / CHAT_NO / CHAT_YES).
-
-**Interfaces** — external surfaces. Web UI for local chat (with SSE streaming and sub-channels), Telegram bot for mobile, MCP server for tool exposure. External agents can also [converse with Alice via a separate MCP endpoint](docs/mcp-ask-connector.md).
 
 ## Quick Start
 
