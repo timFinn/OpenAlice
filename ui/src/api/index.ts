@@ -16,6 +16,7 @@ import { agentStatusApi } from './agentStatus'
 import { dashboardApi } from './dashboard'
 import { personaApi } from './persona'
 import { newsApi } from './news'
+import { diaryApi } from './diary'
 export const api = {
   chat: chatApi,
   config: configApi,
@@ -31,6 +32,7 @@ export const api = {
   dashboard: dashboardApi,
   persona: personaApi,
   news: newsApi,
+  diary: diaryApi,
 }
 
 // Re-export all types for convenience

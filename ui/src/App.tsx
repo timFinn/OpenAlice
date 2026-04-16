@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
 import { ChatPage } from './pages/ChatPage'
+import { DiaryPage } from './pages/DiaryPage'
 import { PortfolioPage } from './pages/PortfolioPage'
 import { AutomationPage } from './pages/AutomationPage'
 import { LogsPage } from './pages/LogsPage'
@@ -16,13 +17,14 @@ import { DevPage } from './pages/DevPage'
 import { MarketPulsePage } from './pages/MarketPulsePage'
 
 export type Page =
-  | 'chat' | 'portfolio' | 'pulse' | 'news' | 'automation' | 'logs' | 'market-data' | 'news-collector' | 'connectors'
+  | 'chat' | 'diary' | 'portfolio' | 'pulse' | 'news' | 'automation' | 'logs' | 'market-data' | 'news-collector' | 'connectors'
   | 'trading'
   | 'ai-provider' | 'settings' | 'dev'
 
 /** Page type → URL path mapping. Chat is the root, everything else maps to /slug. */
 export const ROUTES: Record<Page, string> = {
   'chat': '/',
+  'diary': '/diary',
   'portfolio': '/portfolio',
   'pulse': '/pulse',
   'automation': '/automation',
@@ -66,6 +68,7 @@ export function App() {
         <div key={location.pathname} className="page-fade-in flex-1 flex flex-col min-h-0">
           <Routes>
             <Route path="/" element={<ChatPage onSSEStatus={setSseConnected} />} />
+            <Route path="/diary" element={<DiaryPage />} />
             <Route path="/portfolio" element={<PortfolioPage />} />
             <Route path="/pulse" element={<MarketPulsePage />} />
             <Route path="/automation" element={<AutomationPage />} />
