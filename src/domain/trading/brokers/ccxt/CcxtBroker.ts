@@ -26,7 +26,7 @@ import {
 } from '../types.js'
 import { QuoteCache } from '../../quote-cache.js'
 import '../../contract-ext.js'
-import type { CcxtBrokerConfig, CcxtMarket, FundingRate, OrderBook, OrderBookLevel } from './ccxt-types.js'
+import { CCXT_CREDENTIAL_FIELDS, type CcxtBrokerConfig, type CcxtMarket, type FundingRate, type OrderBook, type OrderBookLevel } from './ccxt-types.js'
 import { MAX_INIT_RETRIES, INIT_RETRY_BASE_MS } from './ccxt-types.js'
 import {
   ccxtTypeToSecType,
@@ -40,7 +40,16 @@ import {
   exchangeOverrides,
   defaultFetchOrderById,
   defaultCancelOrderById,
+  defaultPlaceOrder,
+  defaultFetchPositions,
 } from './overrides.js'
+
+const STABLECOIN_TO_USD = new Set(['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD'])
+
+/** Normalize stablecoin quote currencies to 'USD' so they don't trigger FX conversion. */
+function normalizeQuoteCurrency(quote: string): string {
+  return STABLECOIN_TO_USD.has(quote.toUpperCase()) ? 'USD' : quote
+}
 
 /** Map IBKR orderType codes to CCXT order type strings. */
 function ibkrOrderTypeToCcxt(orderType: string): string {
@@ -63,21 +72,27 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     sandbox: z.boolean().default(false),
     demoTrading: z.boolean().default(false),
     options: z.record(z.string(), z.unknown()).optional(),
+    // All 10 CCXT standard credential fields, all optional.
+    // Each exchange requires its own subset (read via Exchange.requiredCredentials).
     apiKey: z.string().optional(),
-    apiSecret: z.string().optional(),
+    secret: z.string().optional(),
+    apiSecret: z.string().optional(), // legacy alias for `secret`
+    uid: z.string().optional(),
+    accountId: z.string().optional(),
+    login: z.string().optional(),
     password: z.string().optional(),
+    twofa: z.string().optional(),
+    privateKey: z.string().optional(),
+    walletAddress: z.string().optional(),
+    token: z.string().optional(),
   })
 
+  // Static base fields. Exchange dropdown options + per-exchange credential fields
+  // are fetched dynamically by the frontend (see /api/trading/config/ccxt/* routes).
   static configFields: BrokerConfigField[] = [
-    { name: 'exchange', type: 'select', label: 'Exchange', required: true, options: [
-      'binance', 'bybit', 'okx', 'bitget', 'gate', 'kucoin', 'coinbase',
-      'kraken', 'htx', 'mexc', 'bingx', 'phemex', 'woo', 'hyperliquid',
-    ].map(e => ({ value: e, label: e.charAt(0).toUpperCase() + e.slice(1) })) },
+    { name: 'exchange', type: 'select', label: 'Exchange', required: true, options: [] },
     { name: 'sandbox', type: 'boolean', label: 'Sandbox Mode', default: false },
     { name: 'demoTrading', type: 'boolean', label: 'Demo Trading', default: false },
-    { name: 'apiKey', type: 'password', label: 'API Key', required: true, sensitive: true },
-    { name: 'apiSecret', type: 'password', label: 'API Secret', required: true, sensitive: true },
-    { name: 'password', type: 'password', label: 'Password', placeholder: 'Required by some exchanges (e.g. OKX)', sensitive: true },
   ]
 
   static fromConfig(config: { id: string; label?: string; brokerConfig: Record<string, unknown> }): CcxtBroker {
@@ -89,9 +104,17 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       sandbox: bc.sandbox,
       demoTrading: bc.demoTrading,
       options: bc.options,
-      apiKey: bc.apiKey ?? '',
-      apiSecret: bc.apiSecret ?? '',
+      apiKey: bc.apiKey,
+      // Accept both `secret` (CCXT-native) and legacy `apiSecret`
+      secret: bc.secret ?? bc.apiSecret,
+      uid: bc.uid,
+      accountId: bc.accountId,
+      login: bc.login,
       password: bc.password,
+      twofa: bc.twofa,
+      privateKey: bc.privateKey,
+      walletAddress: bc.walletAddress,
+      token: bc.token,
     })
   }
 
@@ -126,18 +149,18 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       throw new BrokerError('CONFIG', `Unknown CCXT exchange: ${config.exchange}`)
     }
 
-    // Default: skip option markets to reduce concurrent requests during loadMarkets
-    const defaultOptions: Record<string, unknown> = {
-      fetchMarkets: { types: ['spot', 'linear', 'inverse'] },
+    // Pass through all CCXT standard credential fields. CCXT ignores undefined.
+    // Do NOT override the exchange's default fetchMarkets.types — each exchange
+    // has its own (e.g. bybit: spot/linear/inverse/option, hyperliquid: spot/swap/hip3).
+    // The init() wrapper below handles option-skipping uniformly via type filtering.
+    const cfgRecord = config as unknown as Record<string, unknown>
+    const credentials: Record<string, unknown> = {}
+    if (config.options !== undefined) credentials.options = config.options
+    for (const field of CCXT_CREDENTIAL_FIELDS) {
+      const v = cfgRecord[field]
+      if (v !== undefined) credentials[field] = v
     }
-    const mergedOptions = { ...defaultOptions, ...config.options }
-
-    this.exchange = new ExchangeClass({
-      apiKey: config.apiKey,
-      secret: config.apiSecret,
-      password: config.password,
-      options: mergedOptions,
-    })
+    this.exchange = new ExchangeClass(credentials)
 
     if (config.sandbox) {
       this.exchange.setSandboxMode(true)
@@ -163,10 +186,18 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
   // ---- Lifecycle ----
 
   async init(): Promise<void> {
-    if (!this.exchange.apiKey || !this.exchange.secret) {
+    // Validate credentials per the exchange's own requiredCredentials map.
+    // Hyperliquid needs walletAddress + privateKey; OKX needs apiKey + secret + password; etc.
+    try {
+      this.exchange.checkRequiredCredentials()
+    } catch (err) {
+      const required = Object.entries(this.exchange.requiredCredentials ?? {})
+        .filter(([, needed]) => needed)
+        .map(([k]) => k)
+      const missing = required.filter(k => !(this.exchange as unknown as Record<string, unknown>)[k])
       throw new BrokerError(
         'CONFIG',
-        `No API credentials configured. Set apiKey and apiSecret in accounts.json to enable this account.`,
+        `${this.exchangeName} requires credentials: ${required.join(', ')}. Missing: ${missing.join(', ') || 'unknown'}. (${err instanceof Error ? err.message : String(err)})`,
       )
     }
 
@@ -177,7 +208,13 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       const ex = this.exchange as unknown as Record<string, unknown>
       const opts = (ex['options'] ?? {}) as Record<string, unknown>
       const fmOpts = (opts['fetchMarkets'] ?? {}) as Record<string, unknown>
-      const types = (fmOpts['types'] ?? ['spot', 'linear', 'inverse']) as string[]
+      // Use the exchange's own default types (set in its CCXT class describe()).
+      // Skip 'option' type — option markets are typically thousands of contracts
+      // (Bybit alone has ~10k+) and rarely useful for automated trading.
+      const allTypes = (fmOpts['types'] ?? []) as string[]
+      const types = allTypes.length > 0
+        ? allTypes.filter(t => t !== 'option')
+        : ['spot', 'linear', 'inverse'] // fallback for exchanges that don't declare types
 
       const allMarkets: unknown[] = []
       for (const type of types) {
@@ -281,6 +318,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
     for (const market of Object.values(this.markets)) {
       if (market.active === false) continue
+      // Some exchanges (e.g. hyperliquid spot) have markets without base/quote populated
+      if (!market.base || !market.quote) continue
       if (market.base.toUpperCase() !== searchBase) continue
 
       const quote = market.quote.toUpperCase()
@@ -297,8 +336,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       const aType = typeOrder[a.type as keyof typeof typeOrder] ?? 99
       const bType = typeOrder[b.type as keyof typeof typeOrder] ?? 99
       if (aType !== bType) return aType - bType
-      const aQuote = quoteOrder[a.quote.toUpperCase()] ?? 99
-      const bQuote = quoteOrder[b.quote.toUpperCase()] ?? 99
+      const aQuote = quoteOrder[(a.quote ?? '').toUpperCase()] ?? 99
+      const bQuote = quoteOrder[(b.quote ?? '').toUpperCase()] ?? 99
       return aQuote - bQuote
     })
 
@@ -381,15 +420,14 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
       const ccxtOrderType = ibkrOrderTypeToCcxt(order.orderType)
       const side = order.action.toLowerCase() as 'buy' | 'sell'
+      const refPrice = ccxtOrderType === 'limit' && order.lmtPrice !== UNSET_DOUBLE
+        ? order.lmtPrice
+        : undefined
 
-      const ccxtOrder = await this.exchange.createOrder(
-        ccxtSymbol,
-        ccxtOrderType,
-        side,
-        parseFloat(size),
-        ccxtOrderType === 'limit' && order.lmtPrice !== UNSET_DOUBLE ? order.lmtPrice : undefined,
-        params,
-      )
+      const placeOverride = this.overrides.placeOrder
+      const ccxtOrder = placeOverride
+        ? await placeOverride(this.exchange, ccxtSymbol, ccxtOrderType, side, parseFloat(size), refPrice, params, defaultPlaceOrder)
+        : await defaultPlaceOrder(this.exchange, ccxtSymbol, ccxtOrderType, side, parseFloat(size), refPrice, params)
 
       // Cache orderId → symbol
       if (ccxtOrder.id) {
@@ -411,8 +449,12 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
 
     try {
       const ccxtSymbol = this.orderSymbolCache.get(orderId)
-      const cancel = this.overrides.cancelOrderById ?? defaultCancelOrderById
-      await cancel(this.exchange, orderId, ccxtSymbol)
+      const cancelOverride = this.overrides.cancelOrderById
+      if (cancelOverride) {
+        await cancelOverride(this.exchange, orderId, ccxtSymbol, defaultCancelOrderById)
+      } else {
+        await defaultCancelOrderById(this.exchange, orderId, ccxtSymbol)
+      }
       const orderState = new OrderState()
       orderState.status = 'Cancelled'
       return { success: true, orderId, orderState }
@@ -431,8 +473,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       }
 
       // editOrder requires type and side — fetch the original order to fill in defaults.
-      const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
-      const original = await fetch(this.exchange, orderId, ccxtSymbol)
+      const fetchOverride = this.overrides.fetchOrderById
+      const original = fetchOverride
+        ? await fetchOverride(this.exchange, orderId, ccxtSymbol, defaultFetchOrderById)
+        : await defaultFetchOrderById(this.exchange, orderId, ccxtSymbol)
       const qty = changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL) ? parseFloat(changes.totalQuantity.toString()) : original.amount
       const price = changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE ? changes.lmtPrice : original.price
 
@@ -500,40 +544,41 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       ])
 
       const bal = balance as unknown as Record<string, Record<string, unknown>>
-      const free = parseFloat(String(bal['free']?.['USDT'] ?? bal['free']?.['USD'] ?? 0))
-      const used = parseFloat(String(bal['used']?.['USDT'] ?? bal['used']?.['USD'] ?? 0))
+      const free = new Decimal(String(bal['free']?.['USDT'] ?? bal['free']?.['USD'] ?? 0))
+      const used = new Decimal(String(bal['used']?.['USDT'] ?? bal['used']?.['USD'] ?? 0))
 
       // Aggregate P&L and market value from positions.
       // We use position-level markPrice (which is fresh from the exchange's
       // websocket feed) rather than balance.total (which is a cached wallet
       // snapshot that may not update between funding/settlement cycles).
-      let unrealizedPnL = 0
-      let realizedPnL = 0
-      let totalPositionValue = 0
+      let unrealizedPnL = new Decimal(0)
+      let realizedPnL = new Decimal(0)
+      let totalPositionValue = new Decimal(0)
       for (const p of rawPositions) {
-        unrealizedPnL += parseFloat(String(p.unrealizedPnl ?? 0))
-        realizedPnL += parseFloat(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0))
+        unrealizedPnL = unrealizedPnL.plus(new Decimal(String(p.unrealizedPnl ?? 0)))
+        realizedPnL = realizedPnL.plus(new Decimal(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)))
 
         // Compute position market value from fresh markPrice
         const contracts = new Decimal(String(p.contracts ?? 0)).abs()
         const contractSize = new Decimal(String(p.contractSize ?? 1))
         const quantity = contracts.mul(contractSize)
-        const markPrice = parseFloat(String(p.markPrice ?? 0))
-        totalPositionValue += quantity.toNumber() * markPrice
+        const markPrice = new Decimal(String(p.markPrice ?? 0))
+        totalPositionValue = totalPositionValue.plus(quantity.mul(markPrice))
       }
 
       // Reconstruct netLiquidation from fresh components:
       //   netLiq = available cash + total position market value
       // This gives a real-time equity figure that tracks markPrice movements,
       // unlike balance.total which only updates on exchange settlement.
-      const netLiquidation = free + totalPositionValue
+      const netLiquidation = free.plus(totalPositionValue)
 
       return {
-        netLiquidation,
-        totalCashValue: free,
-        unrealizedPnL,
-        realizedPnL,
-        initMarginReq: used,
+        baseCurrency: 'USD',
+        netLiquidation: netLiquidation.toString(),
+        totalCashValue: free.toString(),
+        unrealizedPnL: unrealizedPnL.toString(),
+        realizedPnL: realizedPnL.toString(),
+        initMarginReq: used.toString(),
       }
     } catch (err) {
       throw BrokerError.from(err)
@@ -544,7 +589,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     this.ensureInit()
 
     try {
-      const raw = await this.exchange.fetchPositions()
+      const fetchOverride = this.overrides.fetchPositions
+      const raw = fetchOverride
+        ? await fetchOverride(this.exchange, defaultFetchPositions)
+        : await defaultFetchPositions(this.exchange)
       const result: Position[] = []
 
       for (const p of raw) {
@@ -557,20 +605,21 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         const quantity = contracts.mul(contractSize)
         if (quantity.isZero()) continue
 
-        const markPrice = parseFloat(String(p.markPrice ?? 0))
-        const entryPrice = parseFloat(String(p.entryPrice ?? 0))
-        const marketValue = quantity.toNumber() * markPrice
-        const unrealizedPnL = parseFloat(String(p.unrealizedPnl ?? 0))
+        const markPrice = new Decimal(String(p.markPrice ?? 0))
+        const entryPrice = new Decimal(String(p.entryPrice ?? 0))
+        const marketValue = quantity.mul(markPrice)
+        const unrealizedPnL = new Decimal(String(p.unrealizedPnl ?? 0))
 
         result.push({
           contract: marketToContract(market, this.exchangeName),
+          currency: normalizeQuoteCurrency(market.quote ?? 'USDT'),
           side: p.side === 'long' ? 'long' : 'short',
           quantity,
-          avgCost: entryPrice,
-          marketPrice: markPrice,
-          marketValue,
-          unrealizedPnL,
-          realizedPnL: parseFloat(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)),
+          avgCost: entryPrice.toString(),
+          marketPrice: markPrice.toString(),
+          marketValue: marketValue.toString(),
+          unrealizedPnL: unrealizedPnL.toString(),
+          realizedPnL: new Decimal(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)).toString(),
         })
       }
 
@@ -598,9 +647,11 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
     const ccxtSymbol = this.orderSymbolCache.get(orderId)
     if (!ccxtSymbol) return null
 
-    const fetch = this.overrides.fetchOrderById ?? defaultFetchOrderById
+    const fetchOverride = this.overrides.fetchOrderById
     try {
-      const order = await fetch(this.exchange, orderId, ccxtSymbol)
+      const order = fetchOverride
+        ? await fetchOverride(this.exchange, orderId, ccxtSymbol, defaultFetchOrderById)
+        : await defaultFetchOrderById(this.exchange, orderId, ccxtSymbol)
       return this.convertCcxtOrder(order)
     } catch {
       return null

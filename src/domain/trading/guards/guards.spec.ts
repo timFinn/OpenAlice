@@ -46,10 +46,11 @@ function makeContext(overrides: {
     operation: overrides.operation ?? makePlaceOrderOp(),
     positions: overrides.positions ?? [],
     account: {
-      netLiquidation: 100_000,
-      totalCashValue: 100_000,
-      unrealizedPnL: 0,
-      realizedPnL: 0,
+      baseCurrency: 'USD',
+      netLiquidation: '100000',
+      totalCashValue: '100000',
+      unrealizedPnL: '0',
+      realizedPnL: '0',
       ...overrides.account,
     },
   }
@@ -62,7 +63,7 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 20_000 }),
-      account: { netLiquidation: 100_000 },
+      account: { netLiquidation: '100000' },
     })
 
     expect(guard.check(ctx)).toBeNull()
@@ -72,7 +73,7 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 30_000 }),
-      account: { netLiquidation: 100_000 },
+      account: { netLiquidation: '100000' },
     })
 
     const result = guard.check(ctx)
@@ -85,8 +86,8 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 10_000 }),
-      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 20_000 })],
-      account: { netLiquidation: 100_000 },
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '20000' })],
+      account: { netLiquidation: '100000' },
     })
 
     const result = guard.check(ctx)
@@ -99,7 +100,7 @@ describe('MaxPositionSizeGuard', () => {
     const guard = new MaxPositionSizeGuard({})
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 26_000 }),
-      account: { netLiquidation: 100_000 },
+      account: { netLiquidation: '100000' },
     })
     expect(guard.check(ctx)).not.toBeNull()
   })
@@ -200,19 +201,19 @@ describe('MaxDailyLossGuard', () => {
   it('allows trading when within daily loss limit', () => {
     const guard = new MaxDailyLossGuard({ maxDailyLossPercent: 5 })
     // First call establishes day-start equity
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     // Second call with small loss
     const result = guard.check(makeContext({
-      account: { netLiquidation: 97_000 },
+      account: { netLiquidation: '97000' },
     }))
     expect(result).toBeNull()
   })
 
   it('blocks trading when daily loss limit exceeded', () => {
     const guard = new MaxDailyLossGuard({ maxDailyLossPercent: 5 })
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     const result = guard.check(makeContext({
-      account: { netLiquidation: 94_000 },
+      account: { netLiquidation: '94000' },
     }))
     expect(result).not.toBeNull()
     expect(result).toContain('Daily loss limit')
@@ -221,31 +222,31 @@ describe('MaxDailyLossGuard', () => {
 
   it('blocks closePosition too (not just placeOrder)', () => {
     const guard = new MaxDailyLossGuard({ maxDailyLossPercent: 5 })
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     const result = guard.check(makeContext({
       operation: { action: 'closePosition', contract: makeContract({ symbol: 'AAPL' }) },
-      account: { netLiquidation: 90_000 },
+      account: { netLiquidation: '90000' },
     }))
     expect(result).not.toBeNull()
   })
 
   it('allows cancelOrder even when loss limit hit', () => {
     const guard = new MaxDailyLossGuard({ maxDailyLossPercent: 5 })
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     const result = guard.check(makeContext({
       operation: { action: 'cancelOrder', orderId: '123' },
-      account: { netLiquidation: 90_000 },
+      account: { netLiquidation: '90000' },
     }))
     expect(result).toBeNull()
   })
 
   it('uses default 5% if no option provided', () => {
     const guard = new MaxDailyLossGuard({})
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     // 4.9% loss — should pass
-    expect(guard.check(makeContext({ account: { netLiquidation: 95_100 } }))).toBeNull()
+    expect(guard.check(makeContext({ account: { netLiquidation: '95100' } }))).toBeNull()
     // 5.1% loss — should block
-    expect(guard.check(makeContext({ account: { netLiquidation: 94_900 } }))).not.toBeNull()
+    expect(guard.check(makeContext({ account: { netLiquidation: '94900' } }))).not.toBeNull()
   })
 })
 
@@ -255,18 +256,18 @@ describe('MaxDrawdownGuard', () => {
   it('allows trading when within drawdown limit', () => {
     const guard = new MaxDrawdownGuard({ maxDrawdownPercent: 10 })
     // HWM established at 100k
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     const result = guard.check(makeContext({
-      account: { netLiquidation: 95_000 },
+      account: { netLiquidation: '95000' },
     }))
     expect(result).toBeNull()
   })
 
   it('blocks when drawdown exceeds limit', () => {
     const guard = new MaxDrawdownGuard({ maxDrawdownPercent: 10 })
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     const result = guard.check(makeContext({
-      account: { netLiquidation: 89_000 },
+      account: { netLiquidation: '89000' },
     }))
     expect(result).not.toBeNull()
     expect(result).toContain('Drawdown limit')
@@ -275,11 +276,11 @@ describe('MaxDrawdownGuard', () => {
 
   it('ratchets high-water mark up, never down', () => {
     const guard = new MaxDrawdownGuard({ maxDrawdownPercent: 10 })
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
-    guard.check(makeContext({ account: { netLiquidation: 110_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
+    guard.check(makeContext({ account: { netLiquidation: '110000' } }))
     // 10% drawdown from new HWM of 110k
     const result = guard.check(makeContext({
-      account: { netLiquidation: 98_000 },
+      account: { netLiquidation: '98000' },
     }))
     expect(result).not.toBeNull()
     expect(result).toContain('110000') // HWM should be 110k
@@ -287,10 +288,10 @@ describe('MaxDrawdownGuard', () => {
 
   it('skips non-placeOrder operations', () => {
     const guard = new MaxDrawdownGuard({ maxDrawdownPercent: 1 })
-    guard.check(makeContext({ account: { netLiquidation: 100_000 } }))
+    guard.check(makeContext({ account: { netLiquidation: '100000' } }))
     const result = guard.check(makeContext({
       operation: { action: 'closePosition', contract: makeContract({ symbol: 'AAPL' }) },
-      account: { netLiquidation: 50_000 },
+      account: { netLiquidation: '50000' },
     }))
     expect(result).toBeNull()
   })
@@ -396,8 +397,8 @@ describe('MaxExposureGuard', () => {
     const guard = new MaxExposureGuard({ maxExposurePercent: 100 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 30_000 }),
-      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 50_000 })],
-      account: { netLiquidation: 100_000 },
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '50000' })],
+      account: { netLiquidation: '100000' },
     })
     expect(guard.check(ctx)).toBeNull()
   })
@@ -406,8 +407,8 @@ describe('MaxExposureGuard', () => {
     const guard = new MaxExposureGuard({ maxExposurePercent: 80 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 40_000 }),
-      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 50_000 })],
-      account: { netLiquidation: 100_000 },
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '50000' })],
+      account: { netLiquidation: '100000' },
     })
     const result = guard.check(ctx)
     expect(result).not.toBeNull()
@@ -420,10 +421,10 @@ describe('MaxExposureGuard', () => {
     const ctx = makeContext({
       operation: makePlaceOrderOp({ cashQty: 30_000 }),
       positions: [
-        makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 50_000 }),
+        makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '50000' }),
         makePosition({ contract: makeContract({ symbol: 'GOOG' }), marketValue: -30_000 }),
       ],
-      account: { netLiquidation: 100_000 },
+      account: { netLiquidation: '100000' },
     })
     // Current exposure: |50k| + |-30k| = 80k, adding 30k = 110k / 100k = 110%
     const result = guard.check(ctx)
@@ -434,8 +435,8 @@ describe('MaxExposureGuard', () => {
     const guard = new MaxExposureGuard({ maxExposurePercent: 1 })
     const ctx = makeContext({
       operation: { action: 'closePosition', contract: makeContract({ symbol: 'AAPL' }) },
-      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 100_000 })],
-      account: { netLiquidation: 100_000 },
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '100000' })],
+      account: { netLiquidation: '100000' },
     })
     expect(guard.check(ctx)).toBeNull()
   })
@@ -444,8 +445,8 @@ describe('MaxExposureGuard', () => {
     const guard = new MaxExposureGuard({ maxExposurePercent: 1 })
     const ctx = makeContext({
       operation: makePlaceOrderOp({ symbol: 'NEW', totalQuantity: new Decimal(10) }),
-      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: 100_000 })],
-      account: { netLiquidation: 100_000 },
+      positions: [makePosition({ contract: makeContract({ symbol: 'AAPL' }), marketValue: '100000' })],
+      account: { netLiquidation: '100000' },
     })
     // Can't estimate added exposure for new symbol with qty-based order
     expect(guard.check(ctx)).toBeNull()
@@ -510,7 +511,7 @@ describe('createGuardPipeline', () => {
 
   it('fetches positions and account info for guard context', async () => {
     const dispatcher = vi.fn().mockResolvedValue({ success: true })
-    const account = new MockBroker({ accountInfo: { netLiquidation: 105_000, totalCashValue: 100_000, unrealizedPnL: 5_000, realizedPnL: 1_000 } })
+    const account = new MockBroker({ accountInfo: { netLiquidation: '105000', totalCashValue: '100000', unrealizedPnL: '5000', realizedPnL: '1000' } })
     account.setPositions([makePosition()])
 
     let capturedCtx: GuardContext | undefined
@@ -524,7 +525,7 @@ describe('createGuardPipeline', () => {
 
     expect(capturedCtx).toBeDefined()
     expect(capturedCtx!.positions).toHaveLength(1)
-    expect(capturedCtx!.account.netLiquidation).toBe(105_000)
+    expect(capturedCtx!.account.netLiquidation).toBe('105000')
   })
 })
 

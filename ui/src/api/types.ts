@@ -1,28 +1,56 @@
-// ==================== Channels ====================
+// ==================== AI Provider Profiles ====================
 
-export interface VercelAiSdkOverride {
-  provider: string
+export type AIBackend = 'agent-sdk' | 'codex' | 'vercel-ai-sdk'
+
+export interface Profile {
+  backend: AIBackend
   model: string
+  preset?: string     // preset ID this profile was created from
+  loginMethod?: string
+  provider?: string   // vercel-ai-sdk only
   baseUrl?: string
   apiKey?: string
 }
 
-export type LoginMethod = 'api-key' | 'claudeai'
+// ==================== AI Provider Presets ====================
 
-export interface AgentSdkOverride {
-  model?: string
-  baseUrl?: string
-  apiKey?: string
-  loginMethod?: LoginMethod
+export interface Preset {
+  id: string
+  label: string
+  description: string
+  category: 'official' | 'third-party' | 'custom'
+  hint?: string
+  defaultName: string
+  schema: JsonSchema
 }
+
+/** Subset of JSON Schema types we use for form rendering. */
+export interface JsonSchema {
+  type?: string
+  properties?: Record<string, JsonSchemaProperty>
+  required?: string[]
+  [key: string]: unknown
+}
+
+export interface JsonSchemaProperty {
+  type?: string
+  const?: unknown
+  enum?: string[]
+  oneOf?: Array<{ const: string; title: string }>
+  default?: unknown
+  title?: string
+  description?: string
+  writeOnly?: boolean
+  [key: string]: unknown
+}
+
+// ==================== Channels ====================
 
 export interface WebChannel {
   id: string
   label: string
   systemPrompt?: string
-  provider?: 'claude-code' | 'vercel-ai-sdk' | 'agent-sdk'
-  vercelAiSdk?: VercelAiSdkOverride
-  agentSdk?: AgentSdkOverride
+  profile?: string    // slug reference to a profile
   disabledTools?: string[]
 }
 
@@ -60,12 +88,9 @@ export type ChatHistoryItem =
 // ==================== Config ====================
 
 export interface AIProviderConfig {
-  backend: string
-  provider: string
-  model: string
-  baseUrl?: string
-  loginMethod?: LoginMethod
   apiKeys: { anthropic?: string; openai?: string; google?: string }
+  profiles: Record<string, Profile>
+  activeProfile: string
 }
 
 export interface AppConfig {
@@ -114,6 +139,23 @@ export interface NewsCollectorConfig {
   maxInMemory: number
   retentionDays: number
   feeds: NewsCollectorFeed[]
+}
+
+// ==================== News Articles ====================
+
+export interface NewsArticle {
+  time: string
+  title: string
+  content: string
+  source: string | null
+  link: string | null
+  categories: string | null
+}
+
+export interface NewsListResponse {
+  items: NewsArticle[]
+  count: number
+  lookback: string
 }
 
 // ==================== Events ====================
@@ -177,13 +219,14 @@ export interface TradingAccount {
 }
 
 export interface AccountInfo {
-  netLiquidation: number
-  totalCashValue: number
-  unrealizedPnL: number
-  realizedPnL: number
-  buyingPower?: number
-  initMarginReq?: number
-  maintMarginReq?: number
+  baseCurrency: string
+  netLiquidation: string
+  totalCashValue: string
+  unrealizedPnL: string
+  realizedPnL: string
+  buyingPower?: string
+  initMarginReq?: string
+  maintMarginReq?: string
 }
 
 export interface Position {
@@ -199,13 +242,16 @@ export interface Position {
     multiplier?: number
     localSymbol?: string
   }
+  /** Currency denomination of all monetary fields. */
+  currency: string
   side: 'long' | 'short'
   quantity: string // Decimal serialized as string
-  avgCost: number
-  marketPrice: number
-  marketValue: number
-  unrealizedPnL: number
-  realizedPnL: number
+  /** All monetary fields are strings to prevent IEEE 754 floating-point artifacts. */
+  avgCost: string
+  marketPrice: string
+  marketValue: string
+  unrealizedPnL: string
+  realizedPnL: string
 }
 
 export interface WalletCommitLog {
@@ -304,6 +350,8 @@ export interface BrokerTypeInfo {
   type: string
   name: string
   description: string
+  /** Multi-line setup guide shown in the New Account wizard. Paragraphs separated by `\n\n`. */
+  setupGuide?: string
   badge: string
   badgeColor: string
   fields: BrokerConfigField[]
@@ -329,6 +377,7 @@ export interface UTASnapshotSummary {
   timestamp: string
   trigger: string
   account: {
+    baseCurrency: string
     netLiquidation: string
     totalCashValue: string
     unrealizedPnL: string
@@ -339,6 +388,7 @@ export interface UTASnapshotSummary {
   }
   positions: Array<{
     aliceId: string
+    currency: string
     side: 'long' | 'short'
     quantity: string
     avgCost: string

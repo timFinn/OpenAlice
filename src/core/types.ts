@@ -1,6 +1,8 @@
 import type { QueryExecutor } from '@traderalice/opentypebb'
 import type { AccountManager } from '../domain/trading/index.js'
+import type { FxService } from '../domain/trading/fx-service.js'
 import type { SnapshotService } from '../domain/trading/snapshot/index.js'
+import type { INewsProvider } from '../domain/news/types.js'
 import type { CronEngine } from '../task/cron/engine.js'
 import type { Heartbeat } from '../task/heartbeat/index.js'
 import type { Config, WebChannel } from './config.js'
@@ -39,7 +41,9 @@ export interface EngineContext {
 
   // Trading (unified account model)
   accountManager: AccountManager
+  fxService: FxService
   snapshotService?: SnapshotService
+  newsProvider?: INewsProvider
   /** Reconnect connector plugins (Telegram, MCP-Ask, etc.). */
   reconnectConnectors: () => Promise<ReconnectResult>
 }

@@ -2,19 +2,24 @@
  * Technical indicator functions — 纯数学计算
  *
  * RSI, BBANDS, MACD, ATR, STOCHRSI, ADX, OBV, VWAP, PIVOT
+ * 接受 number[] 或 TrackedValues（自动提取 values）
  */
 
+import { toValues, type TrackedValues } from '../types'
 import { EMA, SMA } from './statistics'
 
+type NumericInput = number[] | TrackedValues
+
 /** Relative Strength Index (RSI) */
-export function RSI(data: number[], period: number = 14): number {
-  if (data.length < period + 1) {
-    throw new Error(`RSI requires at least ${period + 1} data points, got ${data.length}`)
+export function RSI(data: NumericInput, period: number = 14): number {
+  const v = toValues(data)
+  if (v.length < period + 1) {
+    throw new Error(`RSI requires at least ${period + 1} data points, got ${v.length}`)
   }
 
   const changes: number[] = []
-  for (let i = 1; i < data.length; i++) {
-    changes.push(data[i] - data[i - 1])
+  for (let i = 1; i < v.length; i++) {
+    changes.push(v[i] - v[i - 1])
   }
 
   const gains = changes.map((c) => (c > 0 ? c : 0))
@@ -38,15 +43,16 @@ export function RSI(data: number[], period: number = 14): number {
 
 /** Bollinger Bands (BBANDS) */
 export function BBANDS(
-  data: number[],
+  data: NumericInput,
   period: number = 20,
   stdDevMultiplier: number = 2,
 ): { upper: number; middle: number; lower: number } {
-  if (data.length < period) {
-    throw new Error(`BBANDS requires at least ${period} data points, got ${data.length}`)
+  const v = toValues(data)
+  if (v.length < period) {
+    throw new Error(`BBANDS requires at least ${period} data points, got ${v.length}`)
   }
 
-  const slice = data.slice(-period)
+  const slice = v.slice(-period)
   const middle = slice.reduce((acc, val) => acc + val, 0) / period
   const variance = slice.reduce((acc, val) => acc + Math.pow(val - middle, 2), 0) / period
   const stdDev = Math.sqrt(variance)
@@ -60,24 +66,25 @@ export function BBANDS(
 
 /** MACD (Moving Average Convergence Divergence) */
 export function MACD(
-  data: number[],
+  data: NumericInput,
   fastPeriod: number = 12,
   slowPeriod: number = 26,
   signalPeriod: number = 9,
 ): { macd: number; signal: number; histogram: number } {
-  if (data.length < slowPeriod + signalPeriod) {
+  const v = toValues(data)
+  if (v.length < slowPeriod + signalPeriod) {
     throw new Error(
-      `MACD requires at least ${slowPeriod + signalPeriod} data points, got ${data.length}`,
+      `MACD requires at least ${slowPeriod + signalPeriod} data points, got ${v.length}`,
     )
   }
 
-  const fastEMA = EMA(data, fastPeriod)
-  const slowEMA = EMA(data, slowPeriod)
+  const fastEMA = EMA(v, fastPeriod)
+  const slowEMA = EMA(v, slowPeriod)
   const macdValue = fastEMA - slowEMA
 
   const macdHistory: number[] = []
-  for (let i = slowPeriod; i <= data.length; i++) {
-    const slice = data.slice(0, i)
+  for (let i = slowPeriod; i <= v.length; i++) {
+    const slice = v.slice(0, i)
     const fast = EMA(slice, fastPeriod)
     const slow = EMA(slice, slowPeriod)
     macdHistory.push(fast - slow)
@@ -95,25 +102,24 @@ export function MACD(
 
 /** Average True Range (ATR) */
 export function ATR(
-  highs: number[],
-  lows: number[],
-  closes: number[],
+  highs: NumericInput,
+  lows: NumericInput,
+  closes: NumericInput,
   period: number = 14,
 ): number {
-  if (highs.length !== lows.length || lows.length !== closes.length || highs.length < period + 1) {
+  const h = toValues(highs)
+  const l = toValues(lows)
+  const c = toValues(closes)
+  if (h.length !== l.length || l.length !== c.length || h.length < period + 1) {
     throw new Error(`ATR requires at least ${period + 1} data points for all arrays`)
   }
 
   const trueRanges: number[] = []
-  for (let i = 1; i < highs.length; i++) {
-    const high = highs[i]
-    const low = lows[i]
-    const prevClose = closes[i - 1]
-
+  for (let i = 1; i < h.length; i++) {
     const tr = Math.max(
-      high - low,
-      Math.abs(high - prevClose),
-      Math.abs(low - prevClose),
+      h[i] - l[i],
+      Math.abs(h[i] - c[i - 1]),
+      Math.abs(l[i] - c[i - 1]),
     )
     trueRanges.push(tr)
   }
@@ -131,19 +137,20 @@ export function ATR(
  * More sensitive than plain RSI for detecting overbought/oversold in trending markets.
  */
 export function STOCHRSI(
-  data: number[],
+  data: NumericInput,
   rsiPeriod: number = 14,
   stochPeriod: number = 14,
 ): { stochRsi: number; k: number; d: number } {
+  const v = toValues(data)
   const minLen = rsiPeriod + stochPeriod + 1
-  if (data.length < minLen) {
-    throw new Error(`STOCHRSI requires at least ${minLen} data points, got ${data.length}`)
+  if (v.length < minLen) {
+    throw new Error(`STOCHRSI requires at least ${minLen} data points, got ${v.length}`)
   }
 
   // Compute RSI series
   const rsiSeries: number[] = []
-  for (let i = rsiPeriod + 1; i <= data.length; i++) {
-    rsiSeries.push(RSI(data.slice(0, i), rsiPeriod))
+  for (let i = rsiPeriod + 1; i <= v.length; i++) {
+    rsiSeries.push(RSI(v.slice(0, i), rsiPeriod))
   }
 
   // Stochastic of RSI over last stochPeriod values
@@ -184,14 +191,17 @@ export function STOCHRSI(
  * >25 = strong trend, <20 = weak/no trend.
  */
 export function ADX(
-  highs: number[],
-  lows: number[],
-  closes: number[],
+  highs: NumericInput,
+  lows: NumericInput,
+  closes: NumericInput,
   period: number = 14,
 ): { adx: number; plusDI: number; minusDI: number } {
+  const h = toValues(highs)
+  const l = toValues(lows)
+  const c = toValues(closes)
   const minLen = period * 2 + 1
-  if (highs.length < minLen || lows.length < minLen || closes.length < minLen) {
-    throw new Error(`ADX requires at least ${minLen} data points, got ${highs.length}`)
+  if (h.length < minLen || l.length < minLen || c.length < minLen) {
+    throw new Error(`ADX requires at least ${minLen} data points, got ${h.length}`)
   }
 
   // Compute True Range, +DM, -DM
@@ -199,14 +209,14 @@ export function ADX(
   const plusDM: number[] = []
   const minusDM: number[] = []
 
-  for (let i = 1; i < highs.length; i++) {
-    const highDiff = highs[i] - highs[i - 1]
-    const lowDiff = lows[i - 1] - lows[i]
+  for (let i = 1; i < h.length; i++) {
+    const highDiff = h[i] - h[i - 1]
+    const lowDiff = l[i - 1] - l[i]
 
     tr.push(Math.max(
-      highs[i] - lows[i],
-      Math.abs(highs[i] - closes[i - 1]),
-      Math.abs(lows[i] - closes[i - 1]),
+      h[i] - l[i],
+      Math.abs(h[i] - c[i - 1]),
+      Math.abs(l[i] - c[i - 1]),
     ))
 
     plusDM.push(highDiff > lowDiff && highDiff > 0 ? highDiff : 0)
@@ -251,15 +261,17 @@ export function ADX(
  * Rising OBV confirms uptrend, falling OBV confirms downtrend.
  * Returns the current OBV value.
  */
-export function OBV(closes: number[], volumes: number[]): number {
-  if (closes.length !== volumes.length || closes.length < 2) {
+export function OBV(closes: NumericInput, volumes: NumericInput): number {
+  const c = toValues(closes)
+  const vol = toValues(volumes)
+  if (c.length !== vol.length || c.length < 2) {
     throw new Error(`OBV requires at least 2 data points with matching closes and volumes`)
   }
 
   let obv = 0
-  for (let i = 1; i < closes.length; i++) {
-    if (closes[i] > closes[i - 1]) obv += volumes[i]
-    else if (closes[i] < closes[i - 1]) obv -= volumes[i]
+  for (let i = 1; i < c.length; i++) {
+    if (c[i] > c[i - 1]) obv += vol[i]
+    else if (c[i] < c[i - 1]) obv -= vol[i]
     // If equal, OBV unchanged
   }
 
@@ -272,28 +284,32 @@ export function OBV(closes: number[], volumes: number[]): number {
  * Returns the cumulative VWAP for the dataset.
  */
 export function VWAP(
-  highs: number[],
-  lows: number[],
-  closes: number[],
-  volumes: number[],
+  highs: NumericInput,
+  lows: NumericInput,
+  closes: NumericInput,
+  volumes: NumericInput,
 ): number {
-  if (highs.length !== lows.length || lows.length !== closes.length || closes.length !== volumes.length) {
+  const h = toValues(highs)
+  const l = toValues(lows)
+  const c = toValues(closes)
+  const vol = toValues(volumes)
+  if (h.length !== l.length || l.length !== c.length || c.length !== vol.length) {
     throw new Error('VWAP requires equal-length arrays for highs, lows, closes, volumes')
   }
-  if (highs.length < 1) {
+  if (h.length < 1) {
     throw new Error('VWAP requires at least 1 data point')
   }
 
   let cumulativeTPV = 0
   let cumulativeVolume = 0
 
-  for (let i = 0; i < highs.length; i++) {
-    const typicalPrice = (highs[i] + lows[i] + closes[i]) / 3
-    cumulativeTPV += typicalPrice * volumes[i]
-    cumulativeVolume += volumes[i]
+  for (let i = 0; i < h.length; i++) {
+    const typicalPrice = (h[i] + l[i] + c[i]) / 3
+    cumulativeTPV += typicalPrice * vol[i]
+    cumulativeVolume += vol[i]
   }
 
-  if (cumulativeVolume === 0) return closes[closes.length - 1]
+  if (cumulativeVolume === 0) return c[c.length - 1]
   return cumulativeTPV / cumulativeVolume
 }
 
@@ -302,17 +318,20 @@ export function VWAP(
  * Takes the most recent bar's high, low, close to compute pivot levels.
  */
 export function PIVOT(
-  highs: number[],
-  lows: number[],
-  closes: number[],
+  highs: NumericInput,
+  lows: NumericInput,
+  closes: NumericInput,
 ): { pivot: number; r1: number; r2: number; r3: number; s1: number; s2: number; s3: number } {
-  if (highs.length < 1 || lows.length < 1 || closes.length < 1) {
+  const hv = toValues(highs)
+  const lv = toValues(lows)
+  const cv = toValues(closes)
+  if (hv.length < 1 || lv.length < 1 || cv.length < 1) {
     throw new Error('PIVOT requires at least 1 data point')
   }
 
-  const h = highs[highs.length - 1]
-  const l = lows[lows.length - 1]
-  const c = closes[closes.length - 1]
+  const h = hv[hv.length - 1]
+  const l = lv[lv.length - 1]
+  const c = cv[cv.length - 1]
 
   const pivot = (h + l + c) / 3
   const r1 = 2 * pivot - l

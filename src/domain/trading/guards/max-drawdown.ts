@@ -22,7 +22,7 @@ export class MaxDrawdownGuard implements OperationGuard {
   check(ctx: GuardContext): string | null {
     if (ctx.operation.action !== 'placeOrder') return null
 
-    const equity = ctx.account.netLiquidation
+    const equity = Number(ctx.account.netLiquidation)
 
     // Update high-water mark
     if (equity > this.highWaterMark) {

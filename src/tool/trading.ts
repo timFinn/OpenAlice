@@ -8,9 +8,11 @@
 
 import { tool, type Tool } from 'ai'
 import { z } from 'zod'
+import Decimal from 'decimal.js'
 import { Contract, UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
 import type { AccountManager } from '@/domain/trading/account-manager.js'
 import { BrokerError, type OpenOrder } from '@/domain/trading/brokers/types.js'
+import type { FxService } from '@/domain/trading/fx-service.js'
 import '@/domain/trading/contract-ext.js'
 
 /** Classify a broker error into a structured response for AI consumption. */
@@ -59,7 +61,7 @@ const sourceDesc = (required: boolean, extra?: string) => {
   return base + req + (extra ? ` ${extra}` : '')
 }
 
-export function createTradingTools(manager: AccountManager): Record<string, Tool> {
+export function createTradingTools(manager: AccountManager, fxService?: FxService): Record<string, Tool> {
   return {
     listAccounts: tool({
       description: 'List all registered trading accounts with their id, provider, label, and capabilities.',
@@ -141,24 +143,50 @@ If this tool returns an error with transient=true, wait a few seconds and retry 
         if (targets.length === 0) return { positions: [], message: 'No accounts available.' }
         try {
           const allPositions: Array<Record<string, unknown>> = []
+          const fxWarnings: string[] = []
           for (const uta of targets) {
             const positions = await uta.getPositions()
             const accountInfo = await uta.getAccount()
-            const totalMarketValue = positions.reduce((sum, p) => sum + p.marketValue, 0)
+
+            // Convert position market values to USD for cross-currency percentage calculations
+            let totalMarketValueUsd = new Decimal(0)
+            const posUsdValues: Decimal[] = []
             for (const pos of positions) {
-              if (symbol && symbol !== 'all' && pos.contract.symbol !== symbol) continue
-              const percentOfEquity = accountInfo.netLiquidation > 0 ? (pos.marketValue / accountInfo.netLiquidation) * 100 : 0
-              const percentOfPortfolio = totalMarketValue > 0 ? (pos.marketValue / totalMarketValue) * 100 : 0
+              if (fxService && pos.currency !== 'USD') {
+                const r = await fxService.convertToUsd(pos.marketValue, pos.currency)
+                posUsdValues.push(new Decimal(r.usd))
+                if (r.fxWarning && !fxWarnings.includes(r.fxWarning)) fxWarnings.push(r.fxWarning)
+              } else {
+                posUsdValues.push(new Decimal(pos.marketValue))
+              }
+              totalMarketValueUsd = totalMarketValueUsd.plus(posUsdValues[posUsdValues.length - 1])
+            }
+
+            // Account netLiq in USD for equity percentage
+            let netLiqUsd = new Decimal(accountInfo.netLiquidation)
+            if (fxService && accountInfo.baseCurrency !== 'USD') {
+              const r = await fxService.convertToUsd(accountInfo.netLiquidation, accountInfo.baseCurrency)
+              netLiqUsd = new Decimal(r.usd)
+            }
+
+            let idx = 0
+            for (const pos of positions) {
+              if (symbol && symbol !== 'all' && pos.contract.symbol !== symbol) { idx++; continue }
+              const mvUsd = posUsdValues[idx]
+              const percentOfEquity = netLiqUsd.gt(0) ? mvUsd.div(netLiqUsd).mul(100) : new Decimal(0)
+              const percentOfPortfolio = totalMarketValueUsd.gt(0) ? mvUsd.div(totalMarketValueUsd).mul(100) : new Decimal(0)
               allPositions.push({
-                source: uta.id, symbol: pos.contract.symbol, side: pos.side,
-                quantity: pos.quantity.toNumber(), avgCost: pos.avgCost, marketPrice: pos.marketPrice,
+                source: uta.id, symbol: pos.contract.symbol, currency: pos.currency, side: pos.side,
+                quantity: pos.quantity.toString(), avgCost: pos.avgCost, marketPrice: pos.marketPrice,
                 marketValue: pos.marketValue, unrealizedPnL: pos.unrealizedPnL, realizedPnL: pos.realizedPnL,
                 percentageOfEquity: `${percentOfEquity.toFixed(1)}%`,
                 percentageOfPortfolio: `${percentOfPortfolio.toFixed(1)}%`,
               })
+              idx++
             }
           }
           if (allPositions.length === 0) return { positions: [], message: 'No open positions.' }
+          if (fxWarnings.length > 0) return { positions: allPositions, fxWarnings }
           return allPositions
         } catch (err) {
           return handleBrokerError(err)
@@ -398,7 +426,7 @@ Optional: attach takeProfit and/or stopLoss for automatic exit orders.`,
     tradingPush: tool({
       description: `Execute committed trading operations. Behavior depends on account config:
 - autoExecute accounts: pushes immediately through the guard pipeline to the broker.
-- manual accounts: requires human approval in the UI.
+- manual accounts: requires human approval (via Web UI, Telegram /trading, or other connected channels).
 Call tradingStatus first to review what will be pushed.`,
       inputSchema: z.object({
         source: z.string().optional().describe(sourceDesc(false, 'If omitted, checks all accounts.')),

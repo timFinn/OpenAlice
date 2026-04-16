@@ -2,13 +2,29 @@ export interface CcxtBrokerConfig {
   id?: string
   label?: string
   exchange: string
-  apiKey: string
-  apiSecret: string
-  password?: string
   sandbox: boolean
   demoTrading?: boolean
   options?: Record<string, unknown>
+  // CCXT standard credential fields (all optional — each exchange requires a different subset)
+  apiKey?: string
+  secret?: string
+  uid?: string
+  accountId?: string
+  login?: string
+  password?: string
+  twofa?: string
+  privateKey?: string
+  walletAddress?: string
+  token?: string
 }
+
+/** CCXT standard credential field names (matches base Exchange.requiredCredentials map). */
+export const CCXT_CREDENTIAL_FIELDS = [
+  'apiKey', 'secret', 'uid', 'accountId', 'login',
+  'password', 'twofa', 'privateKey', 'walletAddress', 'token',
+] as const
+
+export type CcxtCredentialField = typeof CCXT_CREDENTIAL_FIELDS[number]
 
 export interface CcxtMarket {
   id: string        // exchange-native symbol, e.g. "BTCUSDT"

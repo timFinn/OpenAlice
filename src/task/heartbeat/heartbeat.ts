@@ -16,11 +16,12 @@
  */
 
 import type { EventLog, EventLogEntry } from '../../core/event-log.js'
+import type { CronFirePayload } from '../../core/agent-event.js'
 import type { AgentCenter } from '../../core/agent-center.js'
 import { SessionStore } from '../../core/session.js'
 import type { ConnectorCenter } from '../../core/connector-center.js'
 import { writeConfigSection } from '../../core/config.js'
-import type { CronEngine, CronFirePayload } from '../cron/engine.js'
+import type { CronEngine } from '../cron/engine.js'
 
 // ==================== Constants ====================
 
@@ -108,8 +109,8 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
 
   const dedup = new HeartbeatDedup()
 
-  async function handleFire(entry: EventLogEntry): Promise<void> {
-    const payload = entry.payload as CronFirePayload
+  async function handleFire(entry: EventLogEntry<CronFirePayload>): Promise<void> {
+    const payload = entry.payload
 
     // Only handle our own job
     if (payload.jobName !== HEARTBEAT_JOB_NAME) return
@@ -133,7 +134,7 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
       const dateNow = new Date()
       const datePrefix = `[Current date: ${dateNow.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Chicago' })}, ${dateNow.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Chicago', hour12: true })} CT]\n\n`
       const result = await agentCenter.askWithSession(datePrefix + payload.payload, session, {
-        historyPreamble: 'The following is the recent heartbeat conversation history.',
+        historyPreamble: 'You are operating in the heartbeat monitoring context (session: heartbeat). The following is the recent heartbeat conversation history.',
       })
       const durationMs = now() - startMs
 

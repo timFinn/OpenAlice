@@ -59,11 +59,12 @@ export interface MockBrokerOptions {
 // ==================== Defaults ====================
 
 export const DEFAULT_ACCOUNT_INFO: AccountInfo = {
-  netLiquidation: 105_000,
-  totalCashValue: 100_000,
-  unrealizedPnL: 5_000,
-  realizedPnL: 1_000,
-  buyingPower: 200_000,
+  baseCurrency: 'USD',
+  netLiquidation: '105000',
+  totalCashValue: '100000',
+  unrealizedPnL: '5000',
+  realizedPnL: '1000',
+  buyingPower: '200000',
 }
 
 export const DEFAULT_CAPABILITIES: AccountCapabilities = {
@@ -87,13 +88,14 @@ export function makePosition(overrides: Partial<Position> = {}): Position {
   const contract = overrides.contract ?? makeContract()
   return {
     contract,
+    currency: contract.currency || 'USD',
     side: 'long',
     quantity: new Decimal(10),
-    avgCost: 150,
-    marketPrice: 160,
-    marketValue: 1600,
-    unrealizedPnL: 100,
-    realizedPnL: 0,
+    avgCost: '150',
+    marketPrice: '160',
+    marketValue: '1600',
+    unrealizedPnL: '100',
+    realizedPnL: '0',
     ...overrides,
   }
 }
@@ -154,7 +156,7 @@ export class MockBroker implements IBroker {
     this._cash = new Decimal(options.cash ?? 100_000)
     if (options.accountInfo) {
       this._accountOverride = {
-        netLiquidation: 0, totalCashValue: 0, unrealizedPnL: 0, realizedPnL: 0,
+        baseCurrency: 'USD', netLiquidation: '0', totalCashValue: '0', unrealizedPnL: '0', realizedPnL: '0',
         ...options.accountInfo,
       }
     }
@@ -318,7 +320,7 @@ export class MockBroker implements IBroker {
     order.orderType = 'MKT'
     order.totalQuantity = quantity ?? pos.quantity
 
-    return this.placeOrder(pos.contract, order, { reduceOnly: true })
+    return this.placeOrder(pos.contract, order)
   }
 
   // ---- Queries ----
@@ -328,21 +330,23 @@ export class MockBroker implements IBroker {
     this._checkFail('getAccount')
     if (this._accountOverride) return this._accountOverride
 
-    let unrealizedPnL = 0
-    let marketValue = 0
+    let unrealizedPnL = new Decimal(0)
+    let marketValueAcc = new Decimal(0)
     for (const pos of this._positions.values()) {
-      const price = this._quotes.get(pos.contract.symbol ?? '') ?? pos.avgCost.toNumber()
-      const posValue = pos.quantity.toNumber() * price
-      marketValue += posValue
-      unrealizedPnL += pos.quantity.toNumber() * (price - pos.avgCost.toNumber())
+      const price = this._quotes.has(pos.contract.symbol ?? '')
+        ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
+        : pos.avgCost
+      const posValue = pos.quantity.mul(price)
+      marketValueAcc = marketValueAcc.plus(posValue)
+      unrealizedPnL = unrealizedPnL.plus(pos.quantity.mul(price.minus(pos.avgCost)))
     }
 
-    const cash = this._cash.toNumber()
     return {
-      netLiquidation: cash + marketValue,
-      totalCashValue: cash,
-      unrealizedPnL,
-      realizedPnL: this._realizedPnL.toNumber(),
+      baseCurrency: 'USD',
+      netLiquidation: this._cash.plus(marketValueAcc).toString(),
+      totalCashValue: this._cash.toString(),
+      unrealizedPnL: unrealizedPnL.toString(),
+      realizedPnL: this._realizedPnL.toString(),
     }
   }
 
@@ -351,16 +355,19 @@ export class MockBroker implements IBroker {
     this._checkFail('getPositions')
     const result: Position[] = []
     for (const pos of this._positions.values()) {
-      const price = this._quotes.get(pos.contract.symbol ?? '') ?? pos.avgCost.toNumber()
+      const price = this._quotes.has(pos.contract.symbol ?? '')
+        ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
+        : pos.avgCost
       result.push({
         contract: pos.contract,
+        currency: pos.contract.currency || 'USD',
         side: pos.side,
         quantity: pos.quantity,
-        avgCost: pos.avgCost.toNumber(),
-        marketPrice: price,
-        marketValue: pos.quantity.toNumber() * price,
-        unrealizedPnL: pos.quantity.toNumber() * (price - pos.avgCost.toNumber()),
-        realizedPnL: 0,
+        avgCost: pos.avgCost.toString(),
+        marketPrice: price.toString(),
+        marketValue: pos.quantity.mul(price).toString(),
+        unrealizedPnL: pos.quantity.mul(price.minus(pos.avgCost)).toString(),
+        realizedPnL: '0',
       })
     }
     return result
@@ -479,10 +486,13 @@ export class MockBroker implements IBroker {
 
   /** Override account info directly. Bypasses computed values from positions. */
   setAccountInfo(info: Partial<AccountInfo>): void {
-    this._accountOverride = {
-      netLiquidation: 0, totalCashValue: 0, unrealizedPnL: 0, realizedPnL: 0,
-      ...this._accountOverride, ...info,
+    const base: AccountInfo = {
+      baseCurrency: 'USD', netLiquidation: '0', totalCashValue: '0', unrealizedPnL: '0', realizedPnL: '0',
+      ...this._accountOverride,
     }
+    Object.assign(base, info)
+    if (!base.baseCurrency) base.baseCurrency = 'USD'
+    this._accountOverride = base
   }
 
   // ==================== Internal ====================

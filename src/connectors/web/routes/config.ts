@@ -1,12 +1,18 @@
 import { Hono } from 'hono'
-import { loadConfig, writeConfigSection, readAIProviderConfig, validSections, writeAIBackend, type ConfigSection, type AIBackend } from '../../../core/config.js'
+import {
+  loadConfig, writeConfigSection, readAIProviderConfig, validSections,
+  writeProfile, deleteProfile, setActiveProfile,
+  profileSchema, type ConfigSection, type Profile,
+} from '../../../core/config.js'
 import type { EngineContext } from '../../../core/types.js'
+import { BUILTIN_PRESETS } from '../../../ai-providers/presets.js'
 
 interface ConfigRouteOpts {
+  ctx?: EngineContext
   onConnectorsChange?: () => Promise<void>
 }
 
-/** Config routes: GET /, PUT /ai-provider, PUT /:section, GET /api-keys/status */
+/** Config routes: GET /, PUT /:section, profile CRUD, presets, test */
 export function createConfigRoutes(opts?: ConfigRouteOpts) {
   const app = new Hono()
 
@@ -19,19 +25,99 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
     }
   })
 
-  app.put('/ai-provider', async (c) => {
+  // ==================== Profile CRUD ====================
+
+  /** GET /profiles — list all profiles */
+  app.get('/profiles', async (c) => {
     try {
-      const body = await c.req.json<{ backend?: string }>()
-      const backend = body.backend
-      if (backend !== 'claude-code' && backend !== 'vercel-ai-sdk' && backend !== 'agent-sdk') {
-        return c.json({ error: 'Invalid backend. Must be "claude-code", "vercel-ai-sdk", or "agent-sdk".' }, 400)
-      }
-      await writeAIBackend(backend as AIBackend)
-      return c.json({ backend })
+      const config = await readAIProviderConfig()
+      return c.json({ profiles: config.profiles, activeProfile: config.activeProfile })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
   })
+
+  /** POST /profiles — create a new profile */
+  app.post('/profiles', async (c) => {
+    try {
+      const body = await c.req.json<{ slug: string; profile: Profile }>()
+      if (!body.slug?.trim()) {
+        return c.json({ error: 'Profile name is required' }, 400)
+      }
+      const config = await readAIProviderConfig()
+      if (config.profiles[body.slug]) {
+        return c.json({ error: 'profile slug already exists' }, 409)
+      }
+      const validated = profileSchema.parse(body.profile)
+      await writeProfile(body.slug, validated)
+      return c.json({ slug: body.slug, profile: validated }, 201)
+    } catch (err) {
+      if (err instanceof Error && err.name === 'ZodError') {
+        return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
+      }
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  /** PUT /profiles/:slug — update a profile */
+  app.put('/profiles/:slug', async (c) => {
+    try {
+      const slug = c.req.param('slug')
+      const body = await c.req.json<Profile>()
+      const validated = profileSchema.parse(body)
+      await writeProfile(slug, validated)
+      return c.json({ slug, profile: validated })
+    } catch (err) {
+      if (err instanceof Error && err.name === 'ZodError') {
+        return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
+      }
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  /** DELETE /profiles/:slug — delete a profile */
+  app.delete('/profiles/:slug', async (c) => {
+    try {
+      const slug = c.req.param('slug')
+      await deleteProfile(slug)
+      return c.json({ success: true })
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  /** PUT /active-profile — set the active profile */
+  app.put('/active-profile', async (c) => {
+    try {
+      const { slug } = await c.req.json<{ slug: string }>()
+      await setActiveProfile(slug)
+      return c.json({ activeProfile: slug })
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  // ==================== Presets ====================
+
+  /** GET /presets — built-in preset templates for profile creation */
+  app.get('/presets', (c) => c.json({ presets: BUILTIN_PRESETS }))
+
+  // ==================== Profile Test ====================
+
+  /** POST /profiles/test — test profile config by sending "Hi" (without saving) */
+  app.post('/profiles/test', async (c) => {
+    if (!opts?.ctx) return c.json({ ok: false, error: 'Test not available' }, 500)
+    try {
+      const profileData = await c.req.json<Profile>()
+      const validated = profileSchema.parse(profileData)
+      const result = await opts.ctx.agentCenter.testWithProfile(validated, 'Hi')
+      return c.json({ ok: true, response: result.text })
+    } catch (err) {
+      return c.json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    }
+  })
+
+  // ==================== Generic Section Writer ====================
 
   app.put('/:section', async (c) => {
     try {
@@ -50,19 +136,6 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
       if (err instanceof Error && err.name === 'ZodError') {
         return c.json({ error: 'Validation failed', details: JSON.parse(err.message) }, 400)
       }
-      return c.json({ error: String(err) }, 500)
-    }
-  })
-
-  app.get('/api-keys/status', async (c) => {
-    try {
-      const config = await readAIProviderConfig()
-      return c.json({
-        anthropic: !!config.apiKeys.anthropic,
-        openai: !!config.apiKeys.openai,
-        google: !!config.apiKeys.google,
-      })
-    } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
   })

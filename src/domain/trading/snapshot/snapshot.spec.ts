@@ -204,6 +204,7 @@ describe('Snapshot Store', () => {
       timestamp: new Date().toISOString(),
       trigger: 'manual',
       account: {
+        baseCurrency: 'USD',
         netLiquidation: '100000',
         totalCashValue: '90000',
         unrealizedPnL: '5000',
@@ -462,6 +463,7 @@ describe('Snapshot Scheduler', () => {
       takeSnapshot: vi.fn(async () => null),
       takeAllSnapshots: vi.fn(async () => {}),
       getRecent: vi.fn(async () => []),
+      deleteSnapshot: vi.fn(async () => false),
     }
 
     scheduler = createSnapshotScheduler({

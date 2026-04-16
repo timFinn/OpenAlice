@@ -10,7 +10,7 @@ import { tool } from 'ai'
 import { z } from 'zod'
 import type { EquityClientLike, CryptoClientLike, CurrencyClientLike, CommodityClientLike } from '@/domain/market-data/client/types'
 import { IndicatorCalculator } from '@/domain/analysis/indicator/calculator'
-import type { IndicatorContext, OhlcvData } from '@/domain/analysis/indicator/types'
+import type { IndicatorContext, OhlcvData, HistoricalDataResult, DataSourceMeta } from '@/domain/analysis/indicator/types'
 
 /** 根据 interval 决定拉取的日历天数（约 1 倍冗余） */
 function getCalendarDays(interval: string): number {
@@ -44,7 +44,7 @@ function buildContext(
   commodityClient: CommodityClientLike,
 ): IndicatorContext {
   return {
-    getHistoricalData: async (symbol, interval) => {
+    getHistoricalData: async (symbol, interval): Promise<HistoricalDataResult> => {
       const start_date = buildStartDate(interval)
 
       let raw: Array<Record<string, unknown>>
@@ -64,13 +64,21 @@ function buildContext(
       }
 
       // Filter out bars with null OHLC (yfinance returns null for incomplete/missing data)
-      const results = raw.filter(
+      const data = raw.filter(
         (d): d is Record<string, unknown> & OhlcvData =>
           d.close != null && d.open != null && d.high != null && d.low != null,
       ) as OhlcvData[]
 
-      results.sort((a, b) => a.date.localeCompare(b.date))
-      return results
+      data.sort((a, b) => a.date.localeCompare(b.date))
+
+      const meta: DataSourceMeta = {
+        symbol,
+        from: data.length > 0 ? data[0].date : '',
+        to: data.length > 0 ? data[data.length - 1].date : '',
+        bars: data.length,
+      }
+
+      return { data, meta }
     },
   }
 }
@@ -83,35 +91,38 @@ export function createAnalysisTools(
 ) {
   return {
     calculateIndicator: tool({
-      description: `Calculate technical indicators for any asset (equity, crypto, currency) using formula expressions.
+      description: `Calculate technical indicators for any asset using formula expressions.
 
-Asset classes: "equity" for stocks, "crypto" for cryptocurrencies, "currency" for forex pairs, "commodity" for commodities (gold, oil, etc.).
+Asset classes: "equity" for stocks, "crypto" for cryptocurrencies, "currency" for forex pairs, "commodity" for commodities (use canonical names: gold, crude_oil, copper, etc.).
 
-Data access: CLOSE('AAPL', '1d'), HIGH, LOW, OPEN, VOLUME — args: symbol, interval (e.g. '1d', '1w', '1h').
-Statistics: SMA(data, period), EMA, STDEV, MAX, MIN, SUM, AVERAGE.
-Technical indicators:
-  RSI(data, 14) — Relative Strength Index (0-100, >70 overbought, <30 oversold)
-  BBANDS(data, 20, 2) — Bollinger Bands {upper, middle, lower}
-  MACD(data, 12, 26, 9) — MACD {macd, signal, histogram}
-  ATR(highs, lows, closes, 14) — Average True Range (volatility)
-  STOCHRSI(data, 14, 14) — Stochastic RSI {stochRsi, k, d} (more sensitive than RSI)
-  ADX(highs, lows, closes, 14) — Average Directional Index {adx, plusDI, minusDI} (trend strength, >25 = strong)
-  OBV(closes, volumes) — On-Balance Volume (volume flow confirmation)
-  VWAP(highs, lows, closes, volumes) — Volume Weighted Average Price
-  PIVOT(highs, lows, closes) — Floor pivot points {pivot, r1, r2, r3, s1, s2, s3}
+Data access (returns array — use [-1] for latest value):
+  CLOSE('AAPL', '1d'), HIGH, LOW, OPEN, VOLUME — args: symbol, interval (e.g. '1d', '1w', '1h').
+  CLOSE('AAPL', '1d')[-1] → latest close price as a single number.
 
-Array access: CLOSE('AAPL', '1d')[-1] for latest price. Supports +, -, *, / operators.
+Statistics (returns a single number — do NOT use [-1]):
+  SMA(data, period), EMA, STDEV, MAX, MIN, SUM, AVERAGE.
+
+Technical (returns a single number or object — do NOT use [-1]):
+  RSI(data, 14) → number.  BBANDS(data, 20, 2) → {upper, middle, lower}.
+  MACD(data, 12, 26, 9) → {macd, signal, histogram}.  ATR(highs, lows, closes, 14) → number.
+  STOCHRSI(data, 14, 14) → {stochRsi, k, d} (more sensitive than RSI).
+  ADX(highs, lows, closes, 14) → {adx, plusDI, minusDI} (trend strength, >25 = strong).
+  OBV(closes, volumes) → number (volume flow confirmation).
+  VWAP(highs, lows, closes, volumes) → number (Volume Weighted Average Price).
+  PIVOT(highs, lows, closes) → {pivot, r1, r2, r3, s1, s2, s3} (floor pivot points).
+
+Arithmetic: +, -, *, / operators between numbers. E.g. CLOSE(...)[-1] - SMA(..., 50).
 
 Examples:
-  asset="equity":   SMA(CLOSE('AAPL', '1d'), 50)
-  asset="crypto":   RSI(CLOSE('BTCUSD', '1d'), 14)
-  asset="currency": CLOSE('EURUSD', '1d')[-1]
-  asset="commodity": SMA(CLOSE('GC=F', '1d'), 20)   (gold futures)
+  SMA(CLOSE('AAPL', '1d'), 50)              → equity 50-day moving average
+  RSI(CLOSE('BTCUSD', '1d'), 14)            → crypto RSI (single number, no [-1])
+  CLOSE('EURUSD', '1d')[-1]                 → latest forex close (needs [-1])
+  CLOSE('gold', '1d')[-1]                   → latest gold price (canonical name)
   ADX(HIGH('AAPL', '1d'), LOW('AAPL', '1d'), CLOSE('AAPL', '1d'), 14)
   VWAP(HIGH('AAPL', '1h'), LOW('AAPL', '1h'), CLOSE('AAPL', '1h'), VOLUME('AAPL', '1h'))
-  PIVOT(HIGH('SPY', '1d'), LOW('SPY', '1d'), CLOSE('SPY', '1d'))
 
-Use the corresponding search tool first to resolve the correct symbol.`,
+Returns { value, dataRange } where dataRange shows the actual date span of the data used.
+Use marketSearchForResearch to find the correct symbol first.`,
       inputSchema: z.object({
         asset: z.enum(['equity', 'crypto', 'currency', 'commodity']).describe('Asset class'),
         formula: z.string().describe("Formula expression, e.g. SMA(CLOSE('AAPL', '1d'), 50)"),
