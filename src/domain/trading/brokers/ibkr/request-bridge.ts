@@ -446,11 +446,11 @@ export class RequestBridge extends DefaultEWrapper {
   override updatePortfolio(
     contract: Contract,
     position: Decimal,
-    marketPrice: number,
-    marketValue: number,
-    averageCost: number,
-    unrealizedPNL: number,
-    realizedPNL: number,
+    marketPrice: string,
+    marketValue: string,
+    averageCost: string,
+    unrealizedPNL: string,
+    realizedPNL: string,
     _accountName: string,
   ): void {
     if (!this.accountCachePending_) return
@@ -458,11 +458,12 @@ export class RequestBridge extends DefaultEWrapper {
 
     this.accountCachePending_.positions.push({
       contract,
+      currency: contract.currency || 'USD',
       side: position.greaterThan(0) ? 'long' : 'short',
       quantity: position.abs(),
       avgCost: averageCost,
       marketPrice,
-      marketValue: Math.abs(marketValue),
+      marketValue: new Decimal(marketValue).abs().toString(),
       unrealizedPnL: unrealizedPNL,
       realizedPnL: realizedPNL,
     })

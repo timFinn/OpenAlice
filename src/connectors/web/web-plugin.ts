@@ -19,6 +19,8 @@ import { createDevRoutes } from './routes/dev.js'
 import { createToolsRoutes } from './routes/tools.js'
 import { createAgentStatusRoutes } from './routes/agent-status.js'
 import { createDashboardRoutes } from './routes/dashboard.js'
+import { createPersonaRoutes } from './routes/persona.js'
+import { createNewsRoutes } from './routes/news.js'
 
 export interface WebConfig {
   port: number
@@ -73,6 +75,7 @@ export class WebPlugin implements Plugin {
     app.route('/api/channels', createChannelsRoutes({ sessions, sseByChannel: this.sseByChannel }))
     app.route('/api/media', createMediaRoutes())
     app.route('/api/config', createConfigRoutes({
+      ctx,
       onConnectorsChange: async () => { await ctx.reconnectConnectors() },
     }))
     app.route('/api/market-data', createMarketDataRoutes(ctx))
@@ -85,6 +88,8 @@ export class WebPlugin implements Plugin {
     app.route('/api/tools', createToolsRoutes(ctx.toolCenter))
     app.route('/api/agent-status', createAgentStatusRoutes(ctx))
     app.route('/api/dashboard', createDashboardRoutes(ctx))
+    app.route('/api/news', createNewsRoutes(ctx))
+    app.route('/api/persona', createPersonaRoutes())
 
     // ==================== Serve UI (Vite build output) ====================
     const uiRoot = resolve('dist/ui')

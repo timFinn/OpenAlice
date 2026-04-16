@@ -51,6 +51,7 @@ export function SnapshotDetail({ snapshot, onClose }: SnapshotDetailProps) {
               <thead>
                 <tr className="bg-bg text-text-muted text-left">
                   <th className="px-2.5 py-1.5 font-medium">Symbol</th>
+                  <th className="px-2.5 py-1.5 font-medium text-center">Ccy</th>
                   <th className="px-2.5 py-1.5 font-medium text-right">Qty</th>
                   <th className="px-2.5 py-1.5 font-medium text-right">Avg Cost</th>
                   <th className="px-2.5 py-1.5 font-medium text-right">Mkt Price</th>
@@ -70,11 +71,12 @@ export function SnapshotDetail({ snapshot, onClose }: SnapshotDetailProps) {
                         </span>
                       </td>
                       <td className="px-2.5 py-1.5 text-right text-text tabular-nums">{p.quantity}</td>
-                      <td className="px-2.5 py-1.5 text-right text-text-muted tabular-nums">{fmtStr(p.avgCost)}</td>
-                      <td className="px-2.5 py-1.5 text-right text-text tabular-nums">{fmtStr(p.marketPrice)}</td>
-                      <td className="px-2.5 py-1.5 text-right text-text tabular-nums">{fmtStr(p.marketValue)}</td>
+                      <td className="px-2.5 py-1.5 text-center text-text-muted text-[10px] tabular-nums">{p.currency}</td>
+                      <td className="px-2.5 py-1.5 text-right text-text-muted tabular-nums">{fmtStr(p.avgCost, p.currency)}</td>
+                      <td className="px-2.5 py-1.5 text-right text-text tabular-nums">{fmtStr(p.marketPrice, p.currency)}</td>
+                      <td className="px-2.5 py-1.5 text-right text-text tabular-nums">{fmtStr(p.marketValue, p.currency)}</td>
                       <td className={`px-2.5 py-1.5 text-right font-medium tabular-nums ${pnl >= 0 ? 'text-green' : 'text-red'}`}>
-                        {fmtPnlStr(p.unrealizedPnL)}
+                        {fmtPnlStr(p.unrealizedPnL, p.currency)}
                       </td>
                     </tr>
                   )
@@ -153,15 +155,28 @@ function symbolFromAliceId(aliceId: string): string {
   return parts[parts.length - 1]
 }
 
-function fmtStr(s: string): string {
-  const n = Number(s)
-  if (isNaN(n)) return s
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$', HKD: 'HK$', EUR: '€', GBP: '£', JPY: '¥',
+  CNY: '¥', CNH: '¥', CAD: 'C$', AUD: 'A$', CHF: 'CHF ',
+  SGD: 'S$', KRW: '₩', INR: '₹', TWD: 'NT$', BRL: 'R$',
 }
 
-function fmtPnlStr(s: string): string {
+function currencySymbol(currency?: string): string {
+  if (!currency) return '$'
+  return CURRENCY_SYMBOLS[currency.toUpperCase()] ?? `${currency} `
+}
+
+function fmtStr(s: string, currency?: string): string {
   const n = Number(s)
   if (isNaN(n)) return s
+  const sym = currencySymbol(currency)
+  return `${sym}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function fmtPnlStr(s: string, currency?: string): string {
+  const n = Number(s)
+  if (isNaN(n)) return s
+  const sym = currencySymbol(currency)
   const sign = n >= 0 ? '+' : ''
-  return `${sign}$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  return `${sign}${sym}${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }

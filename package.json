@@ -1,10 +1,10 @@
 {
   "name": "open-alice",
-  "version": "0.9.0-beta.9",
+  "version": "0.9.0-beta.12",
   "description": "File-based trading agent engine",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts",
     "dev:ui": "pnpm --filter open-alice-ui dev",
     "predev": "turbo run build --filter=@traderalice/opentypebb --filter=@traderalice/ibkr",
     "build": "turbo run build && tsup src/main.ts --format esm --dts",
@@ -21,7 +21,7 @@
     "securities",
     "file-driven"
   ],
-  "author": "Open Alice Contributors",
+  "author": "OpenAlice Contributors",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -34,7 +34,7 @@
     "@ai-sdk/google": "^3.0.30",
     "@ai-sdk/openai": "^3.0.30",
     "@alpacahq/alpaca-trade-api": "^3.1.3",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.72",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.110",
     "@grammyjs/auto-retry": "^2.0.2",
     "@hono/node-server": "^1.19.11",
     "@modelcontextprotocol/sdk": "^1.27.1",
@@ -51,6 +51,7 @@
     "grammy": "^1.40.0",
     "hono": "^4.12.7",
     "json5": "^2.2.3",
+    "openai": "^6.33.0",
     "pino": "^10.3.1",
     "playwright-core": "1.58.2",
     "sharp": "^0.34.5",

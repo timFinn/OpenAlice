@@ -9,12 +9,14 @@ import { WebPlugin } from './connectors/web/index.js'
 import { McpAskPlugin } from './connectors/mcp-ask/index.js'
 import { createThinkingTools } from './tool/thinking.js'
 import { AccountManager, createSnapshotService, createSnapshotScheduler } from './domain/trading/index.js'
+import { FxService } from './domain/trading/fx-service.js'
 import { createTradingTools } from './tool/trading.js'
 import { Brain } from './domain/brain/index.js'
 import { createBrainTools } from './tool/brain.js'
 import type { BrainExportState } from './domain/brain/index.js'
 import { createBrowserTools } from './tool/browser.js'
 import { SymbolIndex } from './domain/market-data/equity/index.js'
+import { CommodityCatalog } from './domain/market-data/commodity/index.js'
 import { createEquityTools } from './tool/equity.js'
 import { getSDKExecutor, buildRouteMap, SDKEquityClient, SDKCryptoClient, SDKCurrencyClient, SDKEconomyClient, SDKEtfClient, SDKIndexClient, SDKDerivativesClient, SDKCommodityClient } from './domain/market-data/client/typebb/index.js'
 import type { EquityClientLike, CryptoClientLike, CurrencyClientLike, EconomyClientLike, EtfClientLike, IndexClientLike, DerivativesClientLike, CommodityClientLike } from './domain/market-data/client/types.js'
@@ -36,6 +38,7 @@ import { createEconomyTools } from './tool/economy.js'
 import { createPredictionMarketTools } from './tool/prediction-markets.js'
 import { createGDELTTools } from './tool/gdelt.js'
 import { createPaperAttributionTools } from './tool/paper-attribution.js'
+import { createSessionTools } from './tool/session.js'
 import { SessionStore } from './core/session.js'
 import { ConnectorCenter } from './core/connector-center.js'
 import { ToolCenter } from './core/tool-center.js'
@@ -43,6 +46,7 @@ import { AgentCenter } from './core/agent-center.js'
 import { GenerateRouter } from './core/ai-provider-manager.js'
 import { VercelAIProvider } from './ai-providers/vercel-ai-sdk/vercel-provider.js'
 import { AgentSdkProvider } from './ai-providers/agent-sdk/agent-sdk-provider.js'
+import { CodexProvider } from './ai-providers/codex/index.js'
 import { createEventLog } from './core/event-log.js'
 import { createToolCallLog } from './core/tool-call-log.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
@@ -59,6 +63,8 @@ const FRONTAL_LOBE_FILE = resolve('data/brain/frontal-lobe.md')
 const EMOTION_LOG_FILE = resolve('data/brain/emotion-log.md')
 const PERSONA_FILE = resolve('data/brain/persona.md')
 const PERSONA_DEFAULT = resolve('default/persona.default.md')
+const HEARTBEAT_FILE = resolve('data/brain/heartbeat.md')
+const HEARTBEAT_DEFAULT = resolve('default/heartbeat.default.md')
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -106,9 +112,10 @@ async function main() {
 
   // ==================== Brain ====================
 
-  const [brainExport, persona] = await Promise.all([
+  const [brainExport] = await Promise.all([
     readFile(BRAIN_FILE, 'utf-8').then((r) => JSON.parse(r) as BrainExportState).catch(() => undefined),
     readWithDefault(PERSONA_FILE, PERSONA_DEFAULT),
+    readWithDefault(HEARTBEAT_FILE, HEARTBEAT_DEFAULT),
   ])
 
   const brainDir = resolve('data/brain')
@@ -130,21 +137,25 @@ async function main() {
     ? Brain.restore(brainExport, { onCommit: brainOnCommit })
     : new Brain({ onCommit: brainOnCommit })
 
-  const frontalLobe = brain.getFrontalLobe()
-  const emotion = brain.getEmotion().current
-  const now = new Date()
-  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Chicago' })
-  const instructions = [
-    persona,
-    '---',
-    `**Today is ${dateStr}.**`,
-    '',
-    '## Current Brain State',
-    '',
-    `**Frontal Lobe:** ${frontalLobe || '(empty)'}`,
-    '',
-    `**Emotion:** ${emotion}`,
-  ].join('\n')
+  /** Re-read persona from disk + live brain state on each request. */
+  const getInstructions = async () => {
+    const persona = await readFile(PERSONA_FILE, 'utf-8').catch(() => '')
+    const frontalLobe = brain.getFrontalLobe()
+    const emotion = brain.getEmotion().current
+    const now = new Date()
+    const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Chicago' })
+    return [
+      persona,
+      '---',
+      `**Today is ${dateStr}.**`,
+      '',
+      '## Current Brain State',
+      '',
+      `**Frontal Lobe:** ${frontalLobe || '(empty)'}`,
+      '',
+      `**Emotion:** ${emotion}`,
+    ].join('\n')
+  }
 
   // ==================== Cron ====================
 
@@ -178,7 +189,7 @@ async function main() {
     cryptoClient = new OpenBBCryptoClient(url, providers.crypto, keys)
     currencyClient = new OpenBBCurrencyClient(url, providers.currency, keys)
     economyClient = new OpenBBEconomyClient(url, undefined, keys)
-    commodityClient = new OpenBBCommodityClient(url, providers.equity, keys)
+    commodityClient = new OpenBBCommodityClient(url, providers.commodity, keys)
   } else {
     const executor = getSDKExecutor()
     const routeMap = buildRouteMap()
@@ -187,7 +198,7 @@ async function main() {
     cryptoClient = new SDKCryptoClient(executor, 'crypto', providers.crypto, credentials, routeMap)
     currencyClient = new SDKCurrencyClient(executor, 'currency', providers.currency, credentials, routeMap)
     economyClient = new SDKEconomyClient(executor, 'economy', undefined, credentials, routeMap)
-    commodityClient = new SDKCommodityClient(executor, 'commodity', providers.equity, credentials, routeMap)
+    commodityClient = new SDKCommodityClient(executor, 'commodity', providers.commodity, credentials, routeMap)
     etfClient = new SDKEtfClient(executor, 'etf', providers.equity, credentials, routeMap)
     indexClient = new SDKIndexClient(executor, 'index', providers.equity, credentials, routeMap)
     derivativesClient = new SDKDerivativesClient(executor, 'derivatives', providers.equity, credentials, routeMap)
@@ -195,10 +206,18 @@ async function main() {
 
   // OpenBB API server is started later via optionalPlugins
 
+  // ==================== FX Service ====================
+
+  const fxService = new FxService(currencyClient)
+  accountManager.setFxService(fxService)
+
   // ==================== Equity Symbol Index ====================
 
   const symbolIndex = new SymbolIndex()
   await symbolIndex.load(equityClient)
+
+  const commodityCatalog = new CommodityCatalog()
+  commodityCatalog.load()
 
   // ==================== Tool Registration ====================
 
@@ -206,14 +225,14 @@ async function main() {
 
   // One unified set of trading tools — routes via `source` parameter at runtime
   toolCenter.register(
-    createTradingTools(accountManager),
+    createTradingTools(accountManager, fxService),
     'trading',
   )
 
   toolCenter.register(createBrainTools(brain), 'brain')
   toolCenter.register(createBrowserTools(), 'browser')
   toolCenter.register(createCronTools(cronEngine), 'cron')
-  toolCenter.register(createMarketSearchTools(symbolIndex, cryptoClient, currencyClient), 'market-search')
+  toolCenter.register(createMarketSearchTools(symbolIndex, cryptoClient, currencyClient, commodityCatalog), 'market-search')
   toolCenter.register(createEquityTools(equityClient), 'equity')
   if (config.news.enabled) {
     toolCenter.register(createNewsArchiveTools(newsStore), 'news')
@@ -235,14 +254,18 @@ async function main() {
 
   const vercelProvider = new VercelAIProvider(
     () => toolCenter.getVercelTools(),
-    instructions,
+    getInstructions,
     config.agent.maxSteps,
   )
   const agentSdkProvider = new AgentSdkProvider(
     () => toolCenter.getVercelTools(),
-    instructions,
+    getInstructions,
   )
-  const router = new GenerateRouter(vercelProvider, agentSdkProvider)
+  const codexProvider = new CodexProvider(
+    () => toolCenter.getVercelTools(),
+    getInstructions,
+  )
+  const router = new GenerateRouter(vercelProvider, agentSdkProvider, codexProvider)
 
   const agentCenter = new AgentCenter({
     router,
@@ -253,6 +276,9 @@ async function main() {
   // ==================== Connector Center ====================
 
   const connectorCenter = new ConnectorCenter(eventLog)
+
+  // Session awareness tools (registered here because they need connectorCenter)
+  toolCenter.register(createSessionTools(connectorCenter), 'session')
 
   // ==================== Cron Lifecycle ====================
 
@@ -438,7 +464,8 @@ async function main() {
   const ctx: EngineContext = {
     config, connectorCenter, agentCenter, eventLog, toolCallLog, heartbeat, cronEngine, toolCenter,
     bbEngine: getSDKExecutor(),
-    accountManager, snapshotService,
+    accountManager, fxService, snapshotService,
+    newsProvider: newsStore,
     reconnectConnectors,
   }
 

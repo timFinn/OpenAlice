@@ -74,11 +74,11 @@ function makeSwapMarket(base: string, quote: string, symbol?: string): any {
   }
 }
 
-function makeAccount(overrides?: Partial<{ exchange: string; apiKey: string; apiSecret: string }>) {
+function makeAccount(overrides?: Partial<{ exchange: string; apiKey: string; secret: string }>) {
   return new CcxtBroker({
     exchange: overrides?.exchange ?? 'bybit',
     apiKey: overrides?.apiKey ?? 'k',
-    apiSecret: overrides?.apiSecret ?? 's',
+    secret: overrides?.secret ?? 's',
     sandbox: false,
   })
 }
@@ -92,7 +92,7 @@ function setInitialized(acc: CcxtBroker, markets: Record<string, any>) {
 
 describe('CcxtBroker — constructor', () => {
   it('throws for unknown exchange', () => {
-    expect(() => new CcxtBroker({ exchange: 'unknownxyz', apiKey: 'k', apiSecret: 's', sandbox: false })).toThrow(
+    expect(() => new CcxtBroker({ exchange: 'unknownxyz', apiKey: 'k', secret: 's', sandbox: false })).toThrow(
       'Unknown CCXT exchange',
     )
   })
@@ -845,17 +845,17 @@ describe('CcxtBroker — getAccount', () => {
 
     const info = await acc.getAccount()
     // netLiq = free (8000) + position market values (1500 + 500 = 2000) = 10000
-    expect(info.netLiquidation).toBe(10000)
-    expect(info.totalCashValue).toBe(8000)
-    expect(info.initMarginReq).toBe(2000)
-    expect(info.unrealizedPnL).toBe(300)
-    expect(info.realizedPnL).toBe(150)
+    expect(info.netLiquidation).toBe('10000')
+    expect(info.totalCashValue).toBe('8000')
+    expect(info.initMarginReq).toBe('2000')
+    expect(info.unrealizedPnL).toBe('300')
+    expect(info.realizedPnL).toBe('150')
   })
 
   it('throws BrokerError when no API credentials', async () => {
-    const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', apiSecret: '', sandbox: false })
+    const acc = new CcxtBroker({ exchange: 'bybit', apiKey: '', secret: '', sandbox: false })
 
-    await expect(acc.init()).rejects.toThrow('No API credentials configured')
+    await expect(acc.init()).rejects.toThrow(/requires credentials/)
   })
 })
 
@@ -887,8 +887,8 @@ describe('CcxtBroker — getPositions', () => {
     expect(positions[0].quantity).toBeInstanceOf(Decimal)
     expect(positions[0].quantity.toNumber()).toBe(2)
     expect(positions[0].side).toBe('long')
-    expect(positions[0].avgCost).toBe(58000)
-    expect(positions[0].marketPrice).toBe(60000)
+    expect(positions[0].avgCost).toBe('58000')
+    expect(positions[0].marketPrice).toBe('60000')
   })
 
   it('skips zero-size positions', async () => {

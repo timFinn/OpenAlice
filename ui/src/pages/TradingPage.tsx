@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Section, Field, inputClass } from '../components/form'
 import { Toggle } from '../components/Toggle'
 import { GuardsSection, CRYPTO_GUARD_TYPES, SECURITIES_GUARD_TYPES } from '../components/guards'
@@ -329,41 +329,53 @@ function DynamicBrokerFields({ fields, values, showSecrets, onChange }: {
 
 // ==================== Create Wizard ====================
 
-function StepIndicator({ current, total }: { current: number; total: number }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      {Array.from({ length: total }, (_, i) => (
-        <div
-          key={i}
-          className={`h-1 rounded-full transition-all ${
-            i < current ? 'w-5 bg-accent' : 'w-5 bg-border'
-          }`}
-        />
-      ))}
-    </div>
-  )
-}
-
 function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
   brokerTypes: BrokerTypeInfo[]
   existingAccountIds: string[]
   onSave: (account: AccountConfig) => Promise<void>
   onClose: () => void
 }) {
-  const [step, setStep] = useState(1)
   const [type, setType] = useState<string | null>(null)
   const [id, setId] = useState('')
   const [brokerConfig, setBrokerConfig] = useState<Record<string, unknown>>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [showSecrets, setShowSecrets] = useState(false)
+  // CCXT-only: dynamic exchange list and credential fields
+  const [ccxtExchanges, setCcxtExchanges] = useState<string[]>([])
+  const [ccxtCredFields, setCcxtCredFields] = useState<BrokerConfigField[]>([])
 
   const bt = brokerTypes.find(b => b.type === type)
-  const hasSensitive = bt?.fields.some(f => f.sensitive) ?? false
-  const totalSteps = hasSensitive ? 2 : 1
 
-  // Split fields into connection (non-sensitive) and credential (sensitive)
-  const connectionFields = bt?.fields.filter(f => !f.sensitive) ?? []
-  const credentialFields = bt?.fields.filter(f => f.sensitive) ?? []
+  // Merge dynamic CCXT data into broker fields
+  const mergedFields: BrokerConfigField[] = useMemo(() => {
+    if (!bt) return []
+    if (type !== 'ccxt') return bt.fields
+    return bt.fields.map(f => {
+      if (f.name === 'exchange') {
+        return { ...f, options: ccxtExchanges.map(e => ({ value: e, label: e.charAt(0).toUpperCase() + e.slice(1) })) }
+      }
+      return f
+    }).concat(ccxtCredFields)
+  }, [bt, type, ccxtExchanges, ccxtCredFields])
+
+  const hasSensitive = mergedFields.some(f => f.sensitive)
+
+  // Fetch CCXT exchange list when CCXT is selected
+  useEffect(() => {
+    if (type !== 'ccxt') return
+    api.trading.getCcxtExchanges().then(r => setCcxtExchanges(r.exchanges)).catch(() => setCcxtExchanges([]))
+  }, [type])
+
+  // Fetch CCXT credential fields when exchange changes
+  useEffect(() => {
+    if (type !== 'ccxt') { setCcxtCredFields([]); return }
+    const exchange = brokerConfig.exchange as string | undefined
+    if (!exchange) { setCcxtCredFields([]); return }
+    api.trading.getCcxtCredentialFields(exchange)
+      .then(r => setCcxtCredFields(r.fields))
+      .catch(() => setCcxtCredFields([]))
+  }, [type, brokerConfig.exchange])
 
   // Initialize defaults when type changes
   useEffect(() => {
@@ -371,9 +383,18 @@ function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
     const defaults: Record<string, unknown> = {}
     for (const f of bt.fields) {
       if (f.default !== undefined) defaults[f.name] = f.default
+      else if (f.type === 'select' && f.options?.length) defaults[f.name] = f.options[0].value
     }
     setBrokerConfig(defaults)
   }, [type])
+
+  // For CCXT: pre-select first exchange once the list arrives
+  useEffect(() => {
+    if (type !== 'ccxt' || ccxtExchanges.length === 0) return
+    if (!brokerConfig.exchange) {
+      setBrokerConfig(prev => ({ ...prev, exchange: ccxtExchanges[0] }))
+    }
+  }, [type, ccxtExchanges])
 
   const defaultId = type ? `${type}-main` : ''
   const finalId = id.trim() || defaultId
@@ -386,24 +407,15 @@ function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
     badgeColor: b.badgeColor,
   }))
 
-  const handleNext = () => {
+  const handleCreate = async () => {
     if (!type) return
     if (existingAccountIds.includes(finalId)) {
       setError(`Account "${finalId}" already exists`)
       return
     }
-    setError('')
-    if (hasSensitive) {
-      setStep(2)
-    } else {
-      handleCreate()
-    }
-  }
-
-  const handleCreate = async () => {
     setSaving(true); setError('')
     try {
-      const account: AccountConfig = { id: finalId, type: type!, enabled: true, guards: [], brokerConfig }
+      const account: AccountConfig = { id: finalId, type, enabled: true, guards: [], brokerConfig }
 
       const testResult = await api.trading.testConnection(account)
       if (!testResult.success) {
@@ -419,93 +431,74 @@ function CreateWizard({ brokerTypes, existingAccountIds, onSave, onClose }: {
     }
   }
 
-  const canCreate = hasSensitive
-    ? credentialFields.filter(f => f.required).every(f => String(brokerConfig[f.name] ?? '').trim())
-    : true
+  const canCreate = !!type
+    && mergedFields.filter(f => f.required).every(f => String(brokerConfig[f.name] ?? '').trim())
 
   return (
     <Dialog onClose={onClose}>
       {/* Header */}
-      <div className="shrink-0 px-6 py-4 border-b border-border">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-[14px] font-semibold text-text">New Account</h3>
-          <button onClick={onClose} className="text-text-muted hover:text-text p-1 transition-colors">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <StepIndicator current={step} total={totalSteps} />
+      <div className="shrink-0 px-6 py-4 border-b border-border flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-text">New Account</h3>
+        <button onClick={onClose} className="text-text-muted hover:text-text p-1 transition-colors">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
       </div>
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        {step === 1 && (
-          <div className="space-y-5">
-            <div>
-              <p className="text-[12px] font-medium text-text-muted uppercase tracking-wide mb-3">Platform</p>
-              <SDKSelector options={platformOptions} selected={type ?? ''} onSelect={(t) => setType(t)} />
-            </div>
+        <div className="space-y-5">
+          <div>
+            <p className="text-[12px] font-medium text-text-muted uppercase tracking-wide mb-3">Platform</p>
+            <SDKSelector options={platformOptions} selected={type ?? ''} onSelect={(t) => setType(t)} />
+          </div>
 
-            {type && bt && (
+          {type && bt && (
+            <>
+              {bt.setupGuide && (
+                <div className="rounded-md border border-border bg-bg-secondary/50 px-3 py-2.5 space-y-2">
+                  {bt.setupGuide.trim().split('\n\n').map((para, i) => (
+                    <p key={i} className="text-[12px] text-text-muted leading-relaxed whitespace-pre-line">
+                      {para}
+                    </p>
+                  ))}
+                </div>
+              )}
+
               <div className="space-y-3 pt-2 border-t border-border">
-                <p className="text-[12px] font-medium text-text-muted uppercase tracking-wide mb-1">Connection</p>
+                <p className="text-[12px] font-medium text-text-muted uppercase tracking-wide mb-1">Configuration</p>
                 <Field label="Account ID">
                   <input className={inputClass} value={id} onChange={(e) => setId(e.target.value.trim())} placeholder={defaultId} />
                 </Field>
                 <DynamicBrokerFields
-                  fields={connectionFields}
+                  fields={mergedFields}
                   values={brokerConfig}
-                  showSecrets={false}
+                  showSecrets={showSecrets}
                   onChange={(f, v) => setBrokerConfig(prev => ({ ...prev, [f]: v }))}
                 />
+                {hasSensitive && (
+                  <button
+                    onClick={() => setShowSecrets(!showSecrets)}
+                    className="text-[11px] text-text-muted hover:text-text transition-colors"
+                  >
+                    {showSecrets ? 'Hide secrets' : 'Show secrets'}
+                  </button>
+                )}
               </div>
-            )}
-            {error && <p className="text-[12px] text-red">{error}</p>}
-          </div>
-        )}
+            </>
+          )}
 
-        {step === 2 && bt && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 mb-4">
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${bt.badgeColor} ${bt.badgeColor.replace('text-', 'bg-')}/10`}>
-                {bt.badge}
-              </span>
-              <span className="text-[13px] text-text-muted">{bt.name}</span>
-            </div>
-
-            <p className="text-[12px] font-medium text-text-muted uppercase tracking-wide mb-1">Credentials</p>
-            <DynamicBrokerFields
-              fields={credentialFields}
-              values={brokerConfig}
-              showSecrets={false}
-              onChange={(f, v) => setBrokerConfig(prev => ({ ...prev, [f]: v }))}
-            />
-            {error && <p className="text-[12px] text-red">{error}</p>}
-          </div>
-        )}
+          {error && <p className="text-[12px] text-red">{error}</p>}
+        </div>
       </div>
 
       {/* Footer */}
       <div className="shrink-0 flex items-center justify-between px-6 py-4 border-t border-border">
-        <button onClick={step === 1 ? onClose : () => { setStep(1); setError('') }} className="btn-secondary">
-          {step === 1 ? 'Cancel' : 'Back'}
+        <button onClick={onClose} className="btn-secondary">Cancel</button>
+        <button onClick={handleCreate} disabled={saving || !canCreate} className="btn-primary">
+          {saving ? 'Connecting...' : 'Create Account'}
         </button>
-        {step === 1 && !hasSensitive && type && (
-          <button onClick={handleNext} disabled={saving} className="btn-primary">
-            {saving ? 'Connecting...' : 'Create Account'}
-          </button>
-        )}
-        {step === 1 && (hasSensitive || !type) && (
-          <button onClick={handleNext} disabled={!type} className="btn-primary">
-            Next
-          </button>
-        )}
-        {step === 2 && (
-          <button onClick={handleCreate} disabled={saving || !canCreate} className="btn-primary">
-            {saving ? 'Connecting...' : 'Create Account'}
-          </button>
-        )}
       </div>
     </Dialog>
   )
@@ -526,8 +519,27 @@ function EditDialog({ account, brokerType, health, onSaveAccount, onDelete, onCl
   const [msg, setMsg] = useState('')
   const [guardsOpen, setGuardsOpen] = useState(false)
   const [showKeys, setShowKeys] = useState(false)
+  // CCXT-only: dynamic exchange list and credential fields
+  const [ccxtExchanges, setCcxtExchanges] = useState<string[]>([])
+  const [ccxtCredFields, setCcxtCredFields] = useState<BrokerConfigField[]>([])
 
   useEffect(() => { setDraft(account) }, [account])
+
+  // Fetch CCXT exchange list when editing a CCXT account
+  useEffect(() => {
+    if (account.type !== 'ccxt') return
+    api.trading.getCcxtExchanges().then(r => setCcxtExchanges(r.exchanges)).catch(() => setCcxtExchanges([]))
+  }, [account.type])
+
+  // Fetch CCXT credential fields whenever exchange changes
+  useEffect(() => {
+    if (account.type !== 'ccxt') { setCcxtCredFields([]); return }
+    const exchange = draft.brokerConfig.exchange as string | undefined
+    if (!exchange) { setCcxtCredFields([]); return }
+    api.trading.getCcxtCredentialFields(exchange)
+      .then(r => setCcxtCredFields(r.fields))
+      .catch(() => setCcxtCredFields([]))
+  }, [account.type, draft.brokerConfig.exchange])
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(account)
 
@@ -552,7 +564,18 @@ function EditDialog({ account, brokerType, health, onSaveAccount, onDelete, onCl
     }
   }
 
-  const fields = brokerType?.fields ?? []
+  // Merge dynamic CCXT data into broker fields
+  const fields: BrokerConfigField[] = useMemo(() => {
+    const base = brokerType?.fields ?? []
+    if (account.type !== 'ccxt') return base
+    return base.map(f => {
+      if (f.name === 'exchange') {
+        return { ...f, options: ccxtExchanges.map(e => ({ value: e, label: e.charAt(0).toUpperCase() + e.slice(1) })) }
+      }
+      return f
+    }).concat(ccxtCredFields)
+  }, [brokerType, account.type, ccxtExchanges, ccxtCredFields])
+
   const hasSensitive = fields.some(f => f.sensitive)
   const guardTypes = (brokerType?.guardCategory === 'crypto') ? CRYPTO_GUARD_TYPES : SECURITIES_GUARD_TYPES
 

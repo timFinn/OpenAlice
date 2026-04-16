@@ -25,7 +25,7 @@ export class MaxDailyLossGuard implements OperationGuard {
     if (ctx.operation.action !== 'placeOrder' && ctx.operation.action !== 'closePosition') return null
 
     const today = new Date().toISOString().slice(0, 10)
-    const equity = ctx.account.netLiquidation
+    const equity = Number(ctx.account.netLiquidation)
 
     // Reset on new day
     if (this.currentDay !== today) {

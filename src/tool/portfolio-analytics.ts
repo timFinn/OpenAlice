@@ -44,19 +44,22 @@ Use this to assess overall portfolio health beyond individual position metrics.`
 
         for (const uta of targets) {
           const account = await uta.getAccount()
-          totalEquity += account.netLiquidation
-          totalCash += account.totalCashValue
+          const netLiq = Number(account.netLiquidation)
+          const cashVal = Number(account.totalCashValue)
+          totalEquity += netLiq
+          totalCash += cashVal
 
           const positions = await uta.getPositions()
           for (const pos of positions) {
-            const pctEquity = account.netLiquidation > 0
-              ? (pos.marketValue / account.netLiquidation) * 100
+            const mv = Number(pos.marketValue)
+            const pctEquity = netLiq > 0
+              ? (mv / netLiq) * 100
               : 0
             allPositions.push({
               symbol: pos.contract.symbol ?? 'UNKNOWN',
               side: pos.side,
-              marketValue: pos.marketValue,
-              unrealizedPnL: pos.unrealizedPnL ?? 0,
+              marketValue: mv,
+              unrealizedPnL: Number(pos.unrealizedPnL ?? 0),
               percentOfEquity: pctEquity,
             })
           }

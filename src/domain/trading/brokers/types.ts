@@ -67,13 +67,16 @@ export class BrokerError extends Error {
  */
 export interface Position {
   contract: Contract
+  /** Currency denomination for all monetary fields (avgCost, marketPrice, marketValue, PnL). */
+  currency: string
   side: 'long' | 'short'
   quantity: Decimal
-  avgCost: number
-  marketPrice: number
-  marketValue: number
-  unrealizedPnL: number
-  realizedPnL: number
+  /** All monetary fields are strings to prevent IEEE 754 floating-point artifacts. Use Decimal for arithmetic. */
+  avgCost: string
+  marketPrice: string
+  marketValue: string
+  unrealizedPnL: string
+  realizedPnL: string
 }
 
 // ==================== Order result ====================
@@ -103,15 +106,17 @@ export interface OpenOrder {
 
 // ==================== Account info ====================
 
-/** Field names aligned with IBKR AccountSummaryTags. */
+/** Field names aligned with IBKR AccountSummaryTags. All monetary fields are strings to prevent IEEE 754 artifacts. */
 export interface AccountInfo {
-  netLiquidation: number
-  totalCashValue: number
-  unrealizedPnL: number
-  realizedPnL?: number
-  buyingPower?: number
-  initMarginReq?: number
-  maintMarginReq?: number
+  /** Base currency of this account — all monetary fields are denominated in this currency. */
+  baseCurrency: string
+  netLiquidation: string
+  totalCashValue: string
+  unrealizedPnL: string
+  realizedPnL?: string
+  buyingPower?: string
+  initMarginReq?: string
+  maintMarginReq?: string
   dayTradesRemaining?: number
 }
 

@@ -25,11 +25,11 @@ export class MaxExposureGuard implements OperationGuard {
     if (ctx.operation.action !== 'placeOrder') return null
 
     const { positions, account, operation } = ctx
-    const equity = account.netLiquidation
+    const equity = Number(account.netLiquidation)
     if (equity <= 0) return null
 
     // Sum current absolute exposure
-    const currentExposure = positions.reduce((sum, p) => sum + Math.abs(p.marketValue), 0)
+    const currentExposure = positions.reduce((sum, p) => sum + Math.abs(Number(p.marketValue)), 0)
 
     // Estimate added exposure from this order
     const { order } = operation
@@ -43,7 +43,7 @@ export class MaxExposureGuard implements OperationGuard {
       const symbol = operation.contract?.symbol
       const existing = positions.find(p => p.contract.symbol === symbol)
       if (existing) {
-        addedExposure = qty * existing.marketPrice
+        addedExposure = qty * Number(existing.marketPrice)
       }
     }
 

@@ -12,10 +12,10 @@
  */
 
 import type { EventLog, EventLogEntry } from '../../core/event-log.js'
+import type { CronFirePayload } from '../../core/agent-event.js'
 import type { AgentCenter } from '../../core/agent-center.js'
 import { SessionStore } from '../../core/session.js'
 import type { ConnectorCenter } from '../../core/connector-center.js'
-import type { CronFirePayload } from './engine.js'
 /** Internal jobs (prefixed with __) have dedicated handlers and should not be routed to the AI. */
 function isInternalJob(name: string): boolean {
   return name.startsWith('__') && name.endsWith('__')
@@ -45,8 +45,8 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
   let unsubscribe: (() => void) | null = null
   let processing = false
 
-  async function handleFire(entry: EventLogEntry): Promise<void> {
-    const payload = entry.payload as CronFirePayload
+  async function handleFire(entry: EventLogEntry<CronFirePayload>): Promise<void> {
+    const payload = entry.payload
 
     // Guard: internal jobs (__heartbeat__, __snapshot__, etc.) have dedicated handlers
     if (isInternalJob(payload.jobName)) return
@@ -63,7 +63,7 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     try {
       // Ask the AI engine with the cron payload
       const result = await agentCenter.askWithSession(payload.payload, session, {
-        historyPreamble: 'The following is the recent cron session conversation. This is an automated cron job execution.',
+        historyPreamble: `You are operating in the cron job context (session: cron/default, job: ${payload.jobName}). This is an automated cron job execution.`,
       })
 
       // Send notification through the last-interacted connector
