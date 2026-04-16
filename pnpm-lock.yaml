@@ -222,6 +222,9 @@ importers:
       marked-highlight:
         specifier: ^2.2.1
         version: 2.2.3(marked@15.0.12)
+      openai:
+        specifier: ^6.33.0
+        version: 6.33.0(ws@8.19.0)(zod@4.3.6)
       react:
         specifier: ^19.1.0
         version: 19.2.4
