@@ -23,6 +23,7 @@ import {
   type Quote,
   type MarketClock,
   type BrokerConfigField,
+  type TpSlParams,
 } from '../types.js'
 import { QuoteCache } from '../../quote-cache.js'
 import '../../contract-ext.js'
@@ -286,7 +287,7 @@ export class AlpacaBroker implements IBroker {
 
   // ---- Trading operations ----
 
-  async placeOrder(contract: Contract, order: Order): Promise<PlaceOrderResult> {
+  async placeOrder(contract: Contract, order: Order, tpsl?: TpSlParams): Promise<PlaceOrderResult> {
     const symbol = resolveSymbol(contract)
     if (!symbol) {
       return { success: false, error: 'Cannot resolve contract to Alpaca symbol' }
@@ -320,6 +321,20 @@ export class AlpacaBroker implements IBroker {
       if (order.trailingPercent !== UNSET_DOUBLE) alpacaOrder.trail_percent = order.trailingPercent
       if (order.outsideRth) alpacaOrder.extended_hours = true
 
+      // Bracket order (TPSL)
+      if (tpsl?.takeProfit || tpsl?.stopLoss) {
+        alpacaOrder.order_class = 'bracket'
+        if (tpsl.takeProfit) {
+          alpacaOrder.take_profit = { limit_price: parseFloat(tpsl.takeProfit.price) }
+        }
+        if (tpsl.stopLoss) {
+          alpacaOrder.stop_loss = {
+            stop_price: parseFloat(tpsl.stopLoss.price),
+            ...(tpsl.stopLoss.limitPrice && { limit_price: parseFloat(tpsl.stopLoss.limitPrice) }),
+          }
+        }
+      }
+
       const result = await this.client.createOrder(alpacaOrder) as AlpacaOrderRaw
       return {
         success: true,
@@ -335,9 +350,9 @@ export class AlpacaBroker implements IBroker {
     try {
       const patch: Record<string, unknown> = {}
       if (changes.totalQuantity != null && !changes.totalQuantity.equals(UNSET_DECIMAL)) patch.qty = parseFloat(changes.totalQuantity.toString())
-      if (changes.lmtPrice !== UNSET_DOUBLE) patch.limit_price = changes.lmtPrice
-      if (changes.auxPrice !== UNSET_DOUBLE) patch.stop_price = changes.auxPrice
-      if (changes.trailingPercent !== UNSET_DOUBLE) patch.trail = changes.trailingPercent
+      if (changes.lmtPrice != null && changes.lmtPrice !== UNSET_DOUBLE) patch.limit_price = changes.lmtPrice
+      if (changes.auxPrice != null && changes.auxPrice !== UNSET_DOUBLE) patch.stop_price = changes.auxPrice
+      if (changes.trailingPercent != null && changes.trailingPercent !== UNSET_DOUBLE) patch.trail = changes.trailingPercent
       if (changes.tif) patch.time_in_force = ibkrTifToAlpaca(changes.tif)
 
       const result = await this.client.replaceOrder(orderId, patch) as AlpacaOrderRaw
@@ -542,11 +557,31 @@ export class AlpacaBroker implements IBroker {
     // The real string ID is carried via nativeOrderId on OpenOrder.
     order.orderId = 0
 
+    const tpsl = this.extractTpSl(o)
     return {
       contract,
       order,
       orderState: makeOrderState(o.status, o.reject_reason ?? undefined),
       nativeOrderId: o.id,
+      ...(tpsl && { tpsl }),
     }
+  }
+
+  private extractTpSl(o: AlpacaOrderRaw): TpSlParams | undefined {
+    if (o.order_class !== 'bracket' || !o.legs?.length) return undefined
+    let takeProfit: TpSlParams['takeProfit']
+    let stopLoss: TpSlParams['stopLoss']
+    for (const leg of o.legs) {
+      if (leg.limit_price && !leg.stop_price) {
+        takeProfit = { price: leg.limit_price }
+      } else if (leg.stop_price) {
+        stopLoss = {
+          price: leg.stop_price,
+          ...(leg.limit_price && { limitPrice: leg.limit_price }),
+        }
+      }
+    }
+    if (!takeProfit && !stopLoss) return undefined
+    return { takeProfit, stopLoss }
   }
 }

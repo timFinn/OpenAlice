@@ -27,6 +27,8 @@ vi.mock('ccxt', () => {
     this.cancelOrder = vi.fn()
     this.editOrder = vi.fn()
     this.fetchOrder = vi.fn()
+    this.fetchOpenOrder = vi.fn()
+    this.fetchClosedOrder = vi.fn()
     this.fetchFundingRate = vi.fn()
     this.fetchOrderBook = vi.fn()
   })
@@ -72,9 +74,9 @@ function makeSwapMarket(base: string, quote: string, symbol?: string): any {
   }
 }
 
-function makeAccount(overrides?: Partial<{ apiKey: string; apiSecret: string }>) {
+function makeAccount(overrides?: Partial<{ exchange: string; apiKey: string; apiSecret: string }>) {
   return new CcxtBroker({
-    exchange: 'bybit',
+    exchange: overrides?.exchange ?? 'bybit',
     apiKey: overrides?.apiKey ?? 'k',
     apiSecret: overrides?.apiSecret ?? 's',
     sandbox: false,
@@ -270,15 +272,34 @@ describe('CcxtBroker — placeOrder async', () => {
   })
 })
 
-// ==================== getOrder ====================
+// ==================== getOrder — Bybit (tested exchange) ====================
 
-describe('CcxtBroker — getOrder', () => {
-  it('fetches a specific order by ID using cached symbol', async () => {
+describe('CcxtBroker — getOrder (bybit)', () => {
+  it('uses fetchOpenOrder for open orders', async () => {
     const acc = makeAccount()
     const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
     setInitialized(acc, { 'ETH/USDT:USDT': market })
 
-    // Seed the orderSymbolCache
+    ;(acc as any).orderSymbolCache.set('ord-100', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      id: 'ord-100', symbol: 'ETH/USDT:USDT', side: 'buy', amount: 0.1,
+      type: 'limit', price: 1900, status: 'open',
+    })
+
+    const result = await acc.getOrder('ord-100')
+    expect(result).not.toBeNull()
+    expect(result!.order.action).toBe('BUY')
+    expect(result!.orderState.status).toBe('Submitted')
+    expect((acc as any).exchange.fetchOpenOrder).toHaveBeenCalledWith('ord-100', 'ETH/USDT:USDT')
+    // Should NOT use fetchOrder (bybit override avoids it)
+    expect((acc as any).exchange.fetchOrder).not.toHaveBeenCalled()
+  })
+
+  it('falls back to fetchClosedOrder for filled orders', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
     ;(acc as any).orderSymbolCache.set('ord-100', 'ETH/USDT:USDT')
     ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockRejectedValue(new Error('not open'))
     ;(acc as any).exchange.fetchClosedOrder = vi.fn().mockResolvedValue({
@@ -292,6 +313,27 @@ describe('CcxtBroker — getOrder', () => {
     expect(result!.orderState.status).toBe('Filled')
   })
 
+  it('finds conditional orders via { stop: true } fallback', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    ;(acc as any).orderSymbolCache.set('ord-sl', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn()
+      .mockRejectedValueOnce(new Error('not found'))  // regular open
+      .mockResolvedValueOnce({                         // conditional open (stop: true)
+        id: 'ord-sl', symbol: 'ETH/USDT:USDT', side: 'sell', amount: 0.5,
+        type: 'limit', price: 1800, status: 'open', triggerPrice: 1850,
+      })
+    ;(acc as any).exchange.fetchClosedOrder = vi.fn().mockRejectedValue(new Error('not found'))
+
+    const result = await acc.getOrder('ord-sl')
+    expect(result).not.toBeNull()
+    expect(result!.orderState.status).toBe('Submitted')
+    // Second fetchOpenOrder call should have { stop: true }
+    expect((acc as any).exchange.fetchOpenOrder).toHaveBeenCalledWith('ord-sl', 'ETH/USDT:USDT', { stop: true })
+  })
+
   it('returns null when orderId not in symbol cache', async () => {
     const acc = makeAccount()
     setInitialized(acc, {})
@@ -300,7 +342,7 @@ describe('CcxtBroker — getOrder', () => {
     expect(result).toBeNull()
   })
 
-  it('returns null when order not found', async () => {
+  it('returns null when order not found on any endpoint', async () => {
     const acc = makeAccount()
     setInitialized(acc, { 'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT') })
     ;(acc as any).orderSymbolCache.set('ord-404', 'ETH/USDT:USDT')
@@ -309,6 +351,110 @@ describe('CcxtBroker — getOrder', () => {
 
     const result = await acc.getOrder('ord-404')
     expect(result).toBeNull()
+  })
+
+  it('extracts tpsl from CCXT order with takeProfitPrice/stopLossPrice', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    ;(acc as any).orderSymbolCache.set('ord-tp', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      id: 'ord-tp', symbol: 'ETH/USDT:USDT', side: 'buy', amount: 0.1,
+      type: 'limit', price: 1900, status: 'open',
+      takeProfitPrice: 2200,
+      stopLossPrice: 1800,
+    })
+
+    const result = await acc.getOrder('ord-tp')
+    expect(result!.tpsl).toEqual({
+      takeProfit: { price: '2200' },
+      stopLoss: { price: '1800' },
+    })
+  })
+
+  it('returns no tpsl when CCXT order has no TP/SL prices', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    ;(acc as any).orderSymbolCache.set('ord-plain', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      id: 'ord-plain', symbol: 'ETH/USDT:USDT', side: 'buy', amount: 0.1,
+      type: 'limit', price: 1900, status: 'open',
+    })
+
+    const result = await acc.getOrder('ord-plain')
+    expect(result!.tpsl).toBeUndefined()
+  })
+
+  it('extracts only takeProfit when stopLossPrice is absent', async () => {
+    const acc = makeAccount()
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    ;(acc as any).orderSymbolCache.set('ord-tp-only', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      id: 'ord-tp-only', symbol: 'ETH/USDT:USDT', side: 'buy', amount: 0.1,
+      type: 'limit', price: 1900, status: 'open',
+      takeProfitPrice: 2200,
+    })
+
+    const result = await acc.getOrder('ord-tp-only')
+    expect(result!.tpsl).toEqual({ takeProfit: { price: '2200' } })
+  })
+})
+
+// ==================== getOrder — default path (binance etc) ====================
+
+describe('CcxtBroker — getOrder (default/binance)', () => {
+  it('uses fetchOrder for regular orders', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    ;(acc as any).orderSymbolCache.set('ord-100', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOrder = vi.fn().mockResolvedValue({
+      id: 'ord-100', symbol: 'ETH/USDT:USDT', side: 'sell', amount: 0.5,
+      type: 'market', price: null, status: 'closed',
+    })
+
+    const result = await acc.getOrder('ord-100')
+    expect(result).not.toBeNull()
+    expect(result!.order.action).toBe('SELL')
+    expect(result!.orderState.status).toBe('Filled')
+    expect((acc as any).exchange.fetchOrder).toHaveBeenCalledWith('ord-100', 'ETH/USDT:USDT')
+  })
+
+  it('falls back to { stop: true } for conditional orders', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    const market = makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT')
+    setInitialized(acc, { 'ETH/USDT:USDT': market })
+
+    ;(acc as any).orderSymbolCache.set('ord-sl', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOrder = vi.fn()
+      .mockRejectedValueOnce(new Error('order not found'))
+      .mockResolvedValueOnce({
+        id: 'ord-sl', symbol: 'ETH/USDT:USDT', side: 'sell', amount: 0.5,
+        type: 'limit', price: 1800, status: 'open', triggerPrice: 1850,
+      })
+
+    const result = await acc.getOrder('ord-sl')
+    expect(result).not.toBeNull()
+    expect(result!.orderState.status).toBe('Submitted')
+    expect((acc as any).exchange.fetchOrder).toHaveBeenCalledTimes(2)
+    expect((acc as any).exchange.fetchOrder).toHaveBeenLastCalledWith('ord-sl', 'ETH/USDT:USDT', { stop: true })
+  })
+
+  it('returns null when order not found on either endpoint', async () => {
+    const acc = makeAccount({ exchange: 'binance' })
+    setInitialized(acc, { 'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT') })
+    ;(acc as any).orderSymbolCache.set('ord-404', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOrder = vi.fn().mockRejectedValue(new Error('not found'))
+
+    const result = await acc.getOrder('ord-404')
+    expect(result).toBeNull()
+    expect((acc as any).exchange.fetchOrder).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -432,7 +578,8 @@ describe('CcxtBroker — modifyOrder', () => {
     const acc = makeAccount()
     setInitialized(acc, { 'BTC/USDT:USDT': makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT') })
     ;(acc as any).orderSymbolCache.set('ord-100', 'BTC/USDT:USDT')
-    ;(acc as any).exchange.fetchOrder = vi.fn().mockResolvedValue({
+    // Bybit override uses fetchOpenOrder to fetch the original order
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
       type: 'limit', side: 'buy', amount: 0.5, price: 60000,
     })
     ;(acc as any).exchange.editOrder = vi.fn().mockResolvedValue({
@@ -467,6 +614,86 @@ describe('CcxtBroker — modifyOrder', () => {
     const result = await acc.modifyOrder('unknown-order', changes)
     expect(result.success).toBe(false)
     expect(result.error).toContain('Unknown order')
+  })
+})
+
+// ==================== modifyOrder — field forwarding ====================
+
+describe('CcxtBroker — modifyOrder field forwarding', () => {
+  it('uses original price when lmtPrice not in changes (Partial<Order>)', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT') })
+    ;(acc as any).orderSymbolCache.set('ord-200', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      type: 'limit', side: 'buy', amount: 0.1, price: 1900,
+    })
+    ;(acc as any).exchange.editOrder = vi.fn().mockResolvedValue({ id: 'ord-200-edited', status: 'open' })
+
+    // Partial<Order> — only totalQuantity, no lmtPrice
+    const changes: Partial<Order> = { totalQuantity: new Decimal(0.2) }
+
+    await acc.modifyOrder('ord-200', changes)
+    const call = (acc as any).exchange.editOrder.mock.calls[0]
+
+    // Should use original price (1900), not undefined
+    expect(call[4]).toBe(0.2)    // amount
+    expect(call[5]).toBe(1900)   // price from original
+  })
+
+  it('forwards auxPrice as stopPrice in params', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT') })
+    ;(acc as any).orderSymbolCache.set('ord-300', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      type: 'limit', side: 'sell', amount: 0.1, price: 2100,
+    })
+    ;(acc as any).exchange.editOrder = vi.fn().mockResolvedValue({ id: 'ord-300-edited', status: 'open' })
+
+    const changes: Partial<Order> = { auxPrice: 1850 }
+
+    await acc.modifyOrder('ord-300', changes)
+    const call = (acc as any).exchange.editOrder.mock.calls[0]
+
+    // 7th argument is the params object with extra fields
+    const params = call[6] ?? {}
+    expect(params.stopPrice).toBe(1850)
+  })
+
+  it('forwards tif in params', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT') })
+    ;(acc as any).orderSymbolCache.set('ord-400', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      type: 'limit', side: 'buy', amount: 0.1, price: 1900,
+    })
+    ;(acc as any).exchange.editOrder = vi.fn().mockResolvedValue({ id: 'ord-400-edited', status: 'open' })
+
+    const changes: Partial<Order> = { tif: 'GTC' }
+
+    await acc.modifyOrder('ord-400', changes)
+    const call = (acc as any).exchange.editOrder.mock.calls[0]
+
+    const params = call[6] ?? {}
+    expect(params.timeInForce).toBe('gtc')
+  })
+
+  it('does not include undefined fields in params', async () => {
+    const acc = makeAccount()
+    setInitialized(acc, { 'ETH/USDT:USDT': makeSwapMarket('ETH', 'USDT', 'ETH/USDT:USDT') })
+    ;(acc as any).orderSymbolCache.set('ord-500', 'ETH/USDT:USDT')
+    ;(acc as any).exchange.fetchOpenOrder = vi.fn().mockResolvedValue({
+      type: 'limit', side: 'buy', amount: 0.1, price: 1900,
+    })
+    ;(acc as any).exchange.editOrder = vi.fn().mockResolvedValue({ id: 'ord-500-edited', status: 'open' })
+
+    // Only change qty — nothing else should appear in params
+    const changes: Partial<Order> = { totalQuantity: new Decimal(0.5) }
+
+    await acc.modifyOrder('ord-500', changes)
+    const call = (acc as any).exchange.editOrder.mock.calls[0]
+
+    const params = call[6] ?? {}
+    expect(params).toEqual({})
   })
 })
 
@@ -715,7 +942,7 @@ describe('CcxtBroker — getPositions', () => {
 // ==================== getOrders ====================
 
 describe('CcxtBroker — getOrders', () => {
-  it('queries each orderId via getOrder and returns results', async () => {
+  it('queries each orderId via getOrder and returns results (bybit)', async () => {
     const acc = makeAccount()
     const market = makeSwapMarket('BTC', 'USDT', 'BTC/USDT:USDT')
     setInitialized(acc, { 'BTC/USDT:USDT': market })
@@ -723,10 +950,11 @@ describe('CcxtBroker — getOrders', () => {
     ;(acc as any).orderSymbolCache.set('ord-1', 'BTC/USDT:USDT')
     ;(acc as any).orderSymbolCache.set('ord-2', 'BTC/USDT:USDT')
 
+    // Bybit path: ord-1 not open, found via fetchClosedOrder; ord-2 found via fetchOpenOrder
     ;(acc as any).exchange.fetchOpenOrder = vi.fn()
-      .mockRejectedValueOnce(new Error('not open'))  // ord-1 not open
+      .mockRejectedValueOnce(new Error('not open'))   // ord-1 regular
+      .mockRejectedValueOnce(new Error('not open'))   // ord-1 conditional
       .mockResolvedValueOnce({ id: 'ord-2', symbol: 'BTC/USDT:USDT', side: 'buy', type: 'limit', amount: 0.1, price: 55000, status: 'open' })
-
     ;(acc as any).exchange.fetchClosedOrder = vi.fn()
       .mockResolvedValueOnce({ id: 'ord-1', symbol: 'BTC/USDT:USDT', side: 'sell', type: 'market', amount: 0.2, status: 'closed' })
 

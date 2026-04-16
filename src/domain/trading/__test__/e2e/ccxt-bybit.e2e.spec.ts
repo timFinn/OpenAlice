@@ -136,4 +136,100 @@ describe('CcxtBroker — Bybit e2e', () => {
     // Clean up
     await b().closePosition(ethPerp.contract, new Decimal('0.01'))
   }, 15_000)
+
+  it('places order with TPSL and reads back tpsl from getOrder', async ({ skip }) => {
+    const matches = await b().searchContracts('ETH')
+    const ethPerp = matches.find(m => m.contract.localSymbol?.includes('USDT:USDT'))
+    if (!ethPerp) return skip('ETH/USDT perp not found')
+
+    const order = new Order()
+    order.action = 'BUY'
+    order.orderType = 'MKT'
+    order.totalQuantity = new Decimal('0.01')
+
+    // Get current price to set reasonable TP/SL
+    const quote = await b().getQuote(ethPerp.contract)
+    const tpPrice = Math.round(quote.last * 1.5)  // 50% above — won't trigger
+    const slPrice = Math.round(quote.last * 0.5)  // 50% below — won't trigger
+
+    const placed = await b().placeOrder(ethPerp.contract, order, {
+      takeProfit: { price: String(tpPrice) },
+      stopLoss: { price: String(slPrice) },
+    })
+    expect(placed.success).toBe(true)
+    console.log(`  placed with TPSL: orderId=${placed.orderId}, tp=${tpPrice}, sl=${slPrice}`)
+
+    // Wait for exchange to register
+    await new Promise(r => setTimeout(r, 3000))
+
+    const detail = await b().getOrder(placed.orderId!)
+    expect(detail).not.toBeNull()
+    console.log(`  getOrder tpsl:`, JSON.stringify(detail!.tpsl))
+
+    // CCXT should populate takeProfitPrice/stopLossPrice on the fetched order
+    if (detail!.tpsl) {
+      if (detail!.tpsl.takeProfit) {
+        expect(parseFloat(detail!.tpsl.takeProfit.price)).toBe(tpPrice)
+      }
+      if (detail!.tpsl.stopLoss) {
+        expect(parseFloat(detail!.tpsl.stopLoss.price)).toBe(slPrice)
+      }
+    } else {
+      // Some exchanges don't return TP/SL on the parent order — log for visibility
+      console.log('  NOTE: exchange did not return TPSL on fetched order (may be separate conditional orders)')
+    }
+
+    // Clean up
+    await b().closePosition(ethPerp.contract, new Decimal('0.01'))
+  }, 30_000)
+
+  it('queries conditional/trigger order by ID (#90)', async ({ skip }) => {
+    // Place a stop-loss trigger order far from market price, then verify getOrder can see it.
+    // This is the core scenario from issue #90.
+    const matches = await b().searchContracts('ETH')
+    const ethPerp = matches.find(m => m.contract.localSymbol?.includes('USDT:USDT'))
+    if (!ethPerp) return skip('ETH/USDT perp not found')
+
+    // Open a small position first — stop-loss with reduceOnly needs an existing position
+    const buyOrder = new Order()
+    buyOrder.action = 'BUY'
+    buyOrder.orderType = 'MKT'
+    buyOrder.totalQuantity = new Decimal('0.01')
+    const buyResult = await b().placeOrder(ethPerp.contract, buyOrder)
+    if (!buyResult.success) return skip('could not open position for stop-loss test')
+
+    // Get current price to set a trigger far away (won't execute)
+    const quote = await b().getQuote(ethPerp.contract)
+    const triggerPrice = Math.round(quote.last * 0.5) // 50% below — will never trigger
+
+    // Place a conditional sell order via raw CCXT (with triggerPrice).
+    // Bybit requires triggerDirection: price falling below trigger = "descending".
+    const exchange = (b() as any).exchange
+    const rawOrder = await exchange.createOrder(
+      'ETH/USDT:USDT', 'market', 'sell', 0.01,
+      undefined,
+      { triggerPrice, triggerDirection: 'descending', reduceOnly: true },
+    )
+    console.log(`  placed conditional order: id=${rawOrder.id}, triggerPrice=${triggerPrice}`)
+    expect(rawOrder.id).toBeDefined()
+
+    // Wait for exchange to register the order
+    await new Promise(r => setTimeout(r, 2000))
+
+    // Seed the symbol cache (normally done by placeOrder, but we used raw CCXT)
+    ;(b() as any).orderSymbolCache.set(rawOrder.id, 'ETH/USDT:USDT')
+
+    // This is the bug from #90: getOrder must find a conditional order
+    const detail = await b().getOrder(rawOrder.id)
+    console.log(`  getOrder(${rawOrder.id}): ${detail ? `status=${detail.orderState.status}` : 'null (BUG: conditional order invisible)'}`)
+
+    expect(detail).not.toBeNull()
+
+    // Clean up — cancel the conditional order, then close position
+    const cancelResult = await b().cancelOrder(rawOrder.id)
+    console.log(`  cancel conditional: success=${cancelResult.success}`)
+    expect(cancelResult.success).toBe(true)
+
+    await b().closePosition(ethPerp.contract, new Decimal('0.01'))
+  }, 30_000)
 })
