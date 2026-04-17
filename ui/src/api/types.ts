@@ -126,14 +126,19 @@ export interface ConnectorsConfig {
 
 // ==================== Topology ====================
 
+export interface TopologyEventType {
+  name: string
+  external: boolean
+}
+
 export interface TopologyListener {
   name: string
-  eventType: string
+  subscribes: string[]
   emits: string[]
 }
 
 export interface TopologyResponse {
-  eventTypes: string[]
+  eventTypes: TopologyEventType[]
   listeners: TopologyListener[]
 }
 

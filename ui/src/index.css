@@ -331,3 +331,9 @@ body,
 .react-flow__controls-button svg {
   fill: currentColor;
 }
+
+/* External events (webhook-reachable) get a dashed teal outline */
+.react-flow__node.flow-event-external {
+  border-color: var(--color-accent);
+  border-style: dashed;
+}

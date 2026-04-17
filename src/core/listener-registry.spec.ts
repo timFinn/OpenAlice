@@ -36,20 +36,20 @@ describe('ListenerRegistry', () => {
     it('should register a listener and show it in list()', () => {
       const listener: Listener<'cron.fire'> = {
         name: 'test',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle() { /* no-op */ },
       }
       registry.register(listener)
 
       const infos = registry.list()
       expect(infos).toHaveLength(1)
-      expect(infos[0]).toEqual({ name: 'test', eventType: 'cron.fire', emits: [] })
+      expect(infos[0]).toEqual({ name: 'test', subscribes: ['cron.fire'], emits: [] })
     })
 
     it('should throw on duplicate name', () => {
       const listener: Listener<'cron.fire'> = {
         name: 'dup',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle() { /* no-op */ },
       }
       registry.register(listener)
@@ -65,7 +65,7 @@ describe('ListenerRegistry', () => {
       const received: string[] = []
       registry.register({
         name: 'l1',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) { received.push(entry.payload.jobId) },
       })
       await registry.start()
@@ -80,7 +80,7 @@ describe('ListenerRegistry', () => {
       const received: unknown[] = []
       registry.register({
         name: 'l1',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) { received.push(entry) },
       })
       await registry.start()
@@ -95,7 +95,7 @@ describe('ListenerRegistry', () => {
       const received: string[] = []
       registry.register({
         name: 'l1',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) { received.push(entry.payload.jobId) },
       })
       await registry.start()
@@ -116,12 +116,12 @@ describe('ListenerRegistry', () => {
       const b: string[] = []
       registry.register({
         name: 'a',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) { a.push(entry.payload.jobId) },
       })
       registry.register({
         name: 'b',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) { b.push(entry.payload.jobId) },
       })
       await registry.start()
@@ -139,7 +139,7 @@ describe('ListenerRegistry', () => {
       const received: string[] = []
       registry.register({
         name: 'late',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) { received.push(entry.payload.jobId) },
       })
 
@@ -157,12 +157,12 @@ describe('ListenerRegistry', () => {
       const received: string[] = []
       registry.register({
         name: 'boom',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle() { throw new Error('boom') },
       })
       registry.register({
         name: 'ok',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) { received.push(entry.payload.jobId) },
       })
       await registry.start()
@@ -178,7 +178,7 @@ describe('ListenerRegistry', () => {
       let first = true
       registry.register({
         name: 'flaky',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(entry) {
           if (first) { first = false; throw new Error('first one fails') }
           received.push(entry.payload.jobId)
@@ -201,7 +201,7 @@ describe('ListenerRegistry', () => {
     it('should allow emitting declared types and auto-set causedBy', async () => {
       registry.register({
         name: 'cron-echo',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         emits: ['cron.done'] as const,
         async handle(entry, ctx) {
           await ctx.emit('cron.done', {
@@ -232,7 +232,7 @@ describe('ListenerRegistry', () => {
       try {
         registry.register({
           name: 'naughty',
-          eventType: 'cron.fire',
+          subscribes: 'cron.fire',
           emits: ['cron.done'] as const,
           async handle(_entry, ctx) {
             // Cast past the type system to simulate a misuse
@@ -263,7 +263,7 @@ describe('ListenerRegistry', () => {
       try {
         registry.register({
           name: 'silent',
-          eventType: 'cron.fire',
+          subscribes: 'cron.fire',
           async handle(_entry, ctx) {
             await (ctx.emit as unknown as (t: string, p: unknown) => Promise<unknown>)(
               'cron.done',
@@ -287,7 +287,7 @@ describe('ListenerRegistry', () => {
     it('should allow overriding causedBy explicitly via opts', async () => {
       registry.register({
         name: 'cron-override',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         emits: ['cron.done'] as const,
         async handle(_entry, ctx) {
           await ctx.emit(
@@ -316,7 +316,7 @@ describe('ListenerRegistry', () => {
       let recentSeen: number | undefined
       registry.register({
         name: 'snoop',
-        eventType: 'cron.fire',
+        subscribes: 'cron.fire',
         async handle(_entry, ctx) {
           recentSeen = ctx.events.recent({ type: 'cron.fire' }).length
         },
@@ -327,6 +327,170 @@ describe('ListenerRegistry', () => {
       await flush()
 
       expect(recentSeen).toBe(2)
+    })
+  })
+
+  // ==================== multi-type subscribes ====================
+
+  describe('multi-type subscribes', () => {
+    it('should receive events from all types in the tuple', async () => {
+      const received: string[] = []
+      registry.register({
+        name: 'multi',
+        subscribes: ['cron.fire', 'trigger'] as const,
+        async handle(entry) {
+          received.push(entry.type)
+        },
+      })
+      await registry.start()
+
+      await eventLog.append('cron.fire', { jobId: 'j1', jobName: 'x', payload: 'p' })
+      await eventLog.append('trigger', { source: 's', name: 'n', data: {} })
+      await flush()
+
+      expect(received.sort()).toEqual(['cron.fire', 'trigger'])
+    })
+
+    it('should narrow entry.payload via discriminated union on entry.type', async () => {
+      const seen: Record<string, unknown> = {}
+      registry.register({
+        name: 'narrow',
+        subscribes: ['cron.fire', 'trigger'] as const,
+        async handle(entry) {
+          // This compiles only because narrowing via switch works
+          switch (entry.type) {
+            case 'cron.fire':
+              seen.jobId = entry.payload.jobId
+              break
+            case 'trigger':
+              seen.source = entry.payload.source
+              break
+          }
+        },
+      })
+      await registry.start()
+
+      await eventLog.append('cron.fire', { jobId: 'j1', jobName: 'x', payload: 'p' })
+      await eventLog.append('trigger', { source: 'webhook', name: 'n', data: {} })
+      await flush()
+
+      expect(seen.jobId).toBe('j1')
+      expect(seen.source).toBe('webhook')
+    })
+
+    it('ctx.subscribes exposes the normalized array', async () => {
+      let observed: readonly string[] = []
+      registry.register({
+        name: 'self-aware',
+        subscribes: ['cron.fire', 'trigger'] as const,
+        async handle(_entry, ctx) {
+          observed = [...ctx.subscribes].sort()
+        },
+      })
+      await registry.start()
+
+      await eventLog.append('cron.fire', { jobId: 'j', jobName: 'x', payload: 'p' })
+      await flush()
+
+      expect(observed).toEqual(['cron.fire', 'trigger'])
+    })
+  })
+
+  // ==================== wildcard subscribes ====================
+
+  describe("wildcard subscribes ('*')", () => {
+    it('should receive every registered event type', async () => {
+      const seenTypes = new Set<string>()
+      registry.register({
+        name: 'tap',
+        subscribes: '*',
+        async handle(entry) {
+          seenTypes.add(entry.type)
+        },
+      })
+      await registry.start()
+
+      await eventLog.append('cron.fire', { jobId: 'j', jobName: 'x', payload: 'p' })
+      await eventLog.append('trigger', { source: 's', name: 'n', data: {} })
+      await eventLog.append('heartbeat.skip', { reason: 'test' })
+      await flush()
+
+      expect(seenTypes.has('cron.fire')).toBe(true)
+      expect(seenTypes.has('trigger')).toBe(true)
+      expect(seenTypes.has('heartbeat.skip')).toBe(true)
+    })
+
+    it('should ignore events not in AgentEventMap', async () => {
+      const seenTypes = new Set<string>()
+      registry.register({
+        name: 'tap',
+        subscribes: '*',
+        async handle(entry) {
+          seenTypes.add(entry.type)
+        },
+      })
+      await registry.start()
+
+      // Unregistered type bypasses validation via the fallback overload
+      await eventLog.append('random.unregistered', { anything: true })
+      await flush()
+
+      expect(seenTypes.has('random.unregistered')).toBe(false)
+    })
+  })
+
+  // ==================== wildcard emits ====================
+
+  describe("wildcard emits ('*')", () => {
+    it('should allow emitting any registered event type', async () => {
+      registry.register({
+        name: 'router',
+        subscribes: 'cron.fire',
+        emits: '*',
+        async handle(entry, ctx) {
+          await ctx.emit('trigger.done', {
+            source: 'dynamic',
+            name: entry.payload.jobName,
+            reply: 'ok',
+            durationMs: 1,
+          })
+        },
+      })
+      await registry.start()
+
+      await eventLog.append('cron.fire', { jobId: 'j', jobName: 'x', payload: 'p' })
+      await flush()
+
+      const done = eventLog.recent({ type: 'trigger.done' })
+      expect(done).toHaveLength(1)
+    })
+
+    it('should reject emit of unregistered type even with wildcard emits', async () => {
+      const errors: unknown[] = []
+      const origErr = console.error
+      console.error = (...a: unknown[]) => { errors.push(a) }
+      try {
+        registry.register({
+          name: 'naughty',
+          subscribes: 'cron.fire',
+          emits: '*',
+          async handle(_entry, ctx) {
+            await (ctx.emit as unknown as (t: string, p: unknown) => Promise<unknown>)(
+              'never.registered',
+              { foo: 'bar' },
+            )
+          },
+        })
+        await registry.start()
+        await eventLog.append('cron.fire', { jobId: 'j', jobName: 'x', payload: 'p' })
+        await flush()
+
+        expect(errors.length).toBeGreaterThan(0)
+        const msg = String((errors[0] as unknown[])[1])
+        expect(msg).toMatch(/naughty.*unregistered type/)
+      } finally {
+        console.error = origErr
+      }
     })
   })
 })

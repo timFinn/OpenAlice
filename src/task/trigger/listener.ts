@@ -64,7 +64,7 @@ export function createTriggerListener(opts: TriggerListenerOpts): TriggerListene
 
   const listener: Listener<'trigger', TriggerEmits> = {
     name: 'trigger-router',
-    eventType: 'trigger',
+    subscribes: 'trigger',
     emits: TRIGGER_EMITS,
     async handle(
       entry: EventLogEntry<TriggerPayload>,

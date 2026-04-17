@@ -177,6 +177,21 @@ const TriggerErrorSchema = Type.Object({
   durationMs: Type.Number(),
 })
 
+/**
+ * External event allowlist — event types that may be ingested from outside
+ * the process via HTTP (e.g., POST /api/events/ingest). Types NOT in this
+ * set are internal — they can only be produced by in-process code. This
+ * prevents external actors from forging internal state transitions like
+ * `cron.done` or `heartbeat.done`.
+ */
+export const EXTERNAL_EVENT_TYPES: ReadonlySet<keyof AgentEventMap> = new Set([
+  'trigger',
+])
+
+export function isExternalEventType(type: string): boolean {
+  return EXTERNAL_EVENT_TYPES.has(type as keyof AgentEventMap)
+}
+
 /** Schema registry — same keys as AgentEventMap. */
 export const AgentEventSchemas: { [K in keyof AgentEventMap]: TSchema } = {
   'cron.fire': CronFireSchema,

@@ -1,16 +1,21 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import type { EngineContext } from '../../../core/types.js'
-import type { TriggerPayload } from '../../../core/agent-event.js'
-import { validateEventPayload } from '../../../core/agent-event.js'
+import type { AgentEventMap } from '../../../core/agent-event.js'
+import { isExternalEventType, validateEventPayload } from '../../../core/agent-event.js'
 
 /** Event log routes: GET /, GET /recent, GET /stream (SSE), POST /ingest */
 export function createEventsRoutes(ctx: EngineContext) {
   const app = new Hono()
 
   // Ingest external events — webhook / API producer surface.
-  // Note: no auth. Currently localhost-only; gate behind a reverse proxy or add
-  // a token check before exposing publicly.
+  //
+  // Body shape: { type: string, payload: unknown }
+  // Only event types in EXTERNAL_EVENT_TYPES are accepted — prevents external
+  // actors from forging internal state transitions like `cron.done`.
+  //
+  // Auth: none for v1 (localhost-only). Gate behind a reverse proxy / add a
+  // token check before exposing publicly.
   app.post('/ingest', async (c) => {
     let body: unknown
     try {
@@ -19,14 +24,34 @@ export function createEventsRoutes(ctx: EngineContext) {
       return c.json({ error: 'Invalid JSON body' }, 400)
     }
 
+    if (
+      typeof body !== 'object' ||
+      body === null ||
+      typeof (body as { type?: unknown }).type !== 'string'
+    ) {
+      return c.json({ error: 'Body must be { type: string, payload: ... }' }, 400)
+    }
+
+    const { type, payload } = body as { type: string; payload: unknown }
+
+    if (!isExternalEventType(type)) {
+      return c.json(
+        { error: `Event type '${type}' is not in the external allowlist` },
+        403,
+      )
+    }
+
     try {
-      validateEventPayload('trigger', body)
+      validateEventPayload(type, payload)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return c.json({ error: msg }, 400)
     }
 
-    const entry = await ctx.eventLog.append('trigger', body as TriggerPayload)
+    const entry = await ctx.eventLog.append(
+      type as keyof AgentEventMap,
+      payload as AgentEventMap[keyof AgentEventMap],
+    )
     return c.json(entry, 201)
   })
 

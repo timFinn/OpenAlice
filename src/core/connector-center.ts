@@ -76,7 +76,7 @@ export class ConnectorCenter {
     if (listenerRegistry) {
       const listener: Listener<'message.received'> = {
         name: 'connector-interaction-tracker',
-        eventType: 'message.received',
+        subscribes: 'message.received',
         handle: async (entry) => {
           this.touch(entry.payload.channel, entry.payload.to)
         },

@@ -29,12 +29,22 @@ function buildGraph(topology: TopologyResponse): { nodes: Node[]; edges: Edge[] 
   // Partition event types into "inputs" (subscribed by some listener) and
   // "outputs" (emitted by some listener). A type can be both — in that
   // case we render it in inputs only (it's a producer-facing node).
-  const subscribedTo = new Set(topology.listeners.map((l) => l.eventType))
+  const subscribedTo = new Set<string>()
+  for (const l of topology.listeners) for (const s of l.subscribes) subscribedTo.add(s)
   const emitted = new Set<string>()
   for (const l of topology.listeners) for (const e of l.emits) emitted.add(e)
 
-  const inputs = topology.eventTypes.filter((t) => subscribedTo.has(t))
-  const outputs = topology.eventTypes.filter((t) => emitted.has(t) && !subscribedTo.has(t))
+  const typeNames = topology.eventTypes.map((e) => e.name)
+  const externalSet = new Set(
+    topology.eventTypes.filter((e) => e.external).map((e) => e.name),
+  )
+  const inputs = typeNames.filter((t) => subscribedTo.has(t))
+  const outputs = typeNames.filter((t) => emitted.has(t) && !subscribedTo.has(t))
+
+  function eventNodeClassName(type: string): string {
+    const base = 'flow-event-node'
+    return externalSet.has(type) ? `${base} flow-event-external` : base
+  }
 
   // Input event nodes (left column)
   inputs.forEach((type, i) => {
@@ -43,7 +53,7 @@ function buildGraph(topology: TopologyResponse): { nodes: Node[]; edges: Edge[] 
       type: 'default',
       data: { label: type },
       position: { x: COL_X.inputs, y: 20 + i * ROW_HEIGHT },
-      className: 'flow-event-node',
+      className: eventNodeClassName(type),
       sourcePosition: 'right' as any,
       targetPosition: 'left' as any,
     })
@@ -69,21 +79,23 @@ function buildGraph(topology: TopologyResponse): { nodes: Node[]; edges: Edge[] 
       type: 'default',
       data: { label: type },
       position: { x: COL_X.outputs, y: 20 + i * ROW_HEIGHT },
-      className: 'flow-event-node',
+      className: eventNodeClassName(type),
       sourcePosition: 'right' as any,
       targetPosition: 'left' as any,
     })
   })
 
-  // Subscribe edges: eventType → listener
+  // Subscribe edges: eventType → listener (one per subscribed type)
   for (const l of topology.listeners) {
-    edges.push({
-      id: `sub:${l.eventType}->${l.name}`,
-      source: `event:${l.eventType}`,
-      target: `listener:${l.name}`,
-      markerEnd: { type: MarkerType.ArrowClosed },
-      style: { stroke: '#58a6ff', strokeWidth: 1.5 },
-    })
+    for (const s of l.subscribes) {
+      edges.push({
+        id: `sub:${s}->${l.name}`,
+        source: `event:${s}`,
+        target: `listener:${l.name}`,
+        markerEnd: { type: MarkerType.ArrowClosed },
+        style: { stroke: '#58a6ff', strokeWidth: 1.5 },
+      })
+    }
   }
 
   // Emit edges: listener → eventType
