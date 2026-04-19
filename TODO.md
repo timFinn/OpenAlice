@@ -14,11 +14,25 @@ the item when done — git log is the history.
       default `connectorCenter.notify`. Currently every task reply is
       pushed to the last-interacted connector, which is wrong for pure
       background jobs.
-- [ ] `/api/events/ingest`: add auth token gating before exposing beyond
-      localhost. Note already in `src/connectors/web/routes/events.ts`.
 - [ ] `task-router`: support `sessionId` in the payload so different
       external callers get isolated conversation histories instead of
       sharing `task/default`.
+
+## Security
+
+- [ ] Broader API security audit. Only `/api/events/ingest` has auth
+      today; the rest of `/api/*` (config mutation, cron CRUD, heartbeat
+      trigger, chat, trading push, etc.) is unauthenticated and relies
+      entirely on localhost binding. Needs a proper auth story (shared
+      admin token? session cookies? per-route scopes?) before any of it
+      is exposed beyond a single-user local machine.
+- [ ] Webhook tokens: add admin UI for listing / adding / rotating
+      tokens inside the Webhook tab instead of requiring hand-editing
+      `data/config/webhook.json`. Config surface exists; just missing
+      the form.
+- [ ] Token scoping: a webhook token can currently fire any external
+      event type. When more external types exist, let tokens declare
+      which event types they're allowed to inject.
 
 ## Bugs
 

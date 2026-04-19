@@ -3,6 +3,8 @@ import { streamSSE } from 'hono/streaming'
 import type { EngineContext } from '../../../core/types.js'
 import { isExternalEventType, validateEventPayload } from '../../../core/agent-event.js'
 import type { ProducerHandle } from '../../../core/producer.js'
+import { readWebhookConfig } from '../../../core/config.js'
+import { checkAuth, extractPresentedToken } from './webhook-auth.js'
 
 interface EventsDeps {
   ctx: EngineContext
@@ -11,19 +13,54 @@ interface EventsDeps {
   ingestProducer: ProducerHandle<readonly ['task.requested']>
 }
 
-/** Event log routes: GET /, GET /recent, GET /stream (SSE), POST /ingest */
+/** Event log routes: GET /, GET /recent, GET /stream (SSE), POST /ingest, GET /auth-status */
 export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
   const app = new Hono()
+
+  // Auth status — surfaces configuration state to the UI without leaking secrets.
+  app.get('/auth-status', async (c) => {
+    const cfg = await readWebhookConfig()
+    return c.json({
+      configured: cfg.tokens.length > 0,
+      tokenCount: cfg.tokens.length,
+      // Token ids are non-secret labels — safe to expose for the admin UI.
+      tokenIds: cfg.tokens.map((t) => t.id),
+    })
+  })
 
   // Ingest external events — webhook / API producer surface.
   //
   // Body shape: { type: string, payload: unknown }
-  // Only event types in EXTERNAL_EVENT_TYPES are accepted — prevents external
-  // actors from forging internal state transitions like `cron.done`.
-  //
-  // Auth: none for v1 (localhost-only). Gate behind a reverse proxy / add a
-  // token check before exposing publicly.
+  // Gates, in order:
+  //   1. Auth token (Authorization: Bearer / X-OpenAlice-Token) against
+  //      `data/config/webhook.json`. Empty allowlist = 503 default-deny.
+  //   2. isExternalEventType — prevents forging internal state transitions
+  //      like `cron.done`.
+  //   3. validateEventPayload — TypeBox schema validation.
   app.post('/ingest', async (c) => {
+    const cfg = await readWebhookConfig()
+    const presented = extractPresentedToken({
+      authorization: c.req.header('authorization') ?? null,
+      'x-openalice-token': c.req.header('x-openalice-token') ?? null,
+    })
+    const auth = checkAuth(cfg, presented)
+    switch (auth.kind) {
+      case 'unconfigured':
+        return c.json(
+          { error: 'Webhook auth not configured. Add a token in data/config/webhook.json before using this endpoint.' },
+          503,
+        )
+      case 'missing':
+        return c.json(
+          { error: 'Missing auth token. Send Authorization: Bearer <token> or X-OpenAlice-Token header.' },
+          401,
+        )
+      case 'invalid':
+        return c.json({ error: 'Invalid auth token' }, 403)
+      case 'ok':
+        break
+    }
+
     let body: unknown
     try {
       body = await c.req.json()

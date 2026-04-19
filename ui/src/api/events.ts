@@ -42,10 +42,12 @@ export const eventsApi = {
     return es
   },
 
-  async ingest(type: string, payload: unknown): Promise<EventLogEntry> {
+  async ingest(type: string, payload: unknown, opts?: { token?: string }): Promise<EventLogEntry> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (opts?.token) headers['Authorization'] = `Bearer ${opts.token}`
     const res = await fetch('/api/events/ingest', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ type, payload }),
     })
     const body = await res.json().catch(() => null) as { error?: string } | EventLogEntry | null

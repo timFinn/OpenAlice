@@ -53,6 +53,7 @@ function buildCurl(origin: string, type: string, payload: unknown): string {
   const body = JSON.stringify({ type, payload }, null, 2)
   return `curl -X POST ${origin}/api/events/ingest \\
   -H 'Content-Type: application/json' \\
+  -H 'Authorization: Bearer $OPENALICE_TOKEN' \\
   -d '${body.replace(/'/g, "'\\''")}'`
 }
 
@@ -60,7 +61,10 @@ function buildFetch(type: string, payload: unknown): string {
   const body = JSON.stringify({ type, payload }, null, 2)
   return `await fetch('/api/events/ingest', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': \`Bearer \${process.env.OPENALICE_TOKEN}\`,
+  },
   body: JSON.stringify(${body.replace(/\n/g, '\n  ')}),
 })`
 }
@@ -102,15 +106,100 @@ function EndpointCard() {
         <span className="font-mono text-sm text-text">/api/events/ingest</span>
       </div>
       <p className="text-[13px] text-text-muted leading-relaxed">
-        Body: <code className="font-mono text-text">{'{ type: string, payload: object }'}</code>. Only event
-        types that are explicitly marked <code className="font-mono text-text">external: true</code> on the
-        backend are accepted — everything else returns <code className="font-mono">403</code>. Payloads are
-        validated against the event's registered schema; invalid payloads return <code className="font-mono">400</code>.
+        Every request must present a bearer token via
+        <code className="font-mono text-text mx-1">Authorization: Bearer &lt;token&gt;</code>
+        or <code className="font-mono text-text mx-1">X-OpenAlice-Token: &lt;token&gt;</code>.
+        Body: <code className="font-mono text-text">{'{ type: string, payload: object }'}</code>.
+        Only event types explicitly marked <code className="font-mono text-text">external: true</code>
+        on the backend are accepted.
       </p>
       <p className="text-[13px] text-text-muted leading-relaxed">
-        Responses: <code className="font-mono">201</code> with the appended
-        event entry (<code className="font-mono">{'{ seq, ts, type, payload }'}</code>) on success. No auth in
-        v1 — gate behind a reverse proxy or add a token check before exposing publicly.
+        Status codes: <code className="font-mono">201</code> on success (body is the appended
+        event entry, <code className="font-mono">{'{ seq, ts, type, payload }'}</code>) ·
+        <code className="font-mono mx-1">401</code> missing auth header ·
+        <code className="font-mono mx-1">403</code> invalid token or non-external type ·
+        <code className="font-mono mx-1">400</code> malformed body or schema violation ·
+        <code className="font-mono mx-1">503</code> no tokens configured (default-deny).
+      </p>
+    </div>
+  )
+}
+
+interface AuthStatus {
+  configured: boolean
+  tokenCount: number
+  tokenIds: string[]
+}
+
+function AuthStatusCard() {
+  const [status, setStatus] = useState<AuthStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetch('/api/events/auth-status')
+      .then((r) => r.json())
+      .then(setStatus)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+  }, [])
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red/40 bg-bg p-4">
+        <div className="text-[13px] text-red">Could not load auth status: {error}</div>
+      </div>
+    )
+  }
+  if (!status) return null
+
+  if (!status.configured) {
+    return (
+      <div className="rounded-lg border border-red/60 bg-bg p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-red" />
+          <span className="text-sm font-medium text-text">Auth not configured</span>
+        </div>
+        <p className="text-[12px] text-text-muted leading-relaxed">
+          The ingest endpoint is in default-deny mode — every request returns
+          <code className="font-mono mx-1">503</code> until at least one token is added.
+          Generate one and drop it into
+          <code className="font-mono mx-1">data/config/webhook.json</code>:
+        </p>
+        <CodeBlock label="generate a 32-byte hex token" code="openssl rand -hex 32" />
+        <CodeBlock
+          label="data/config/webhook.json"
+          code={`{
+  "tokens": [
+    {
+      "id": "local-dev",
+      "token": "<paste-token-here>"
+    }
+  ]
+}`}
+        />
+        <p className="text-[12px] text-text-muted leading-relaxed">
+          Changes take effect immediately — the config is re-read on every ingest request, no restart needed.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg border border-green/40 bg-bg p-4 space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full bg-green" />
+        <span className="text-sm font-medium text-text">Auth configured</span>
+        <span className="text-[12px] text-text-muted">
+          {status.tokenCount} token{status.tokenCount === 1 ? '' : 's'}
+        </span>
+      </div>
+      {status.tokenIds.length > 0 && (
+        <div className="text-[12px] text-text-muted font-mono">
+          ids: {status.tokenIds.join(', ')}
+        </div>
+      )}
+      <p className="text-[12px] text-text-muted leading-relaxed">
+        Rotate by adding a new entry with a fresh token, waiting for callers to switch, then removing the old one.
+        Edit <code className="font-mono">data/config/webhook.json</code> directly — no restart needed.
       </p>
     </div>
   )
@@ -169,8 +258,13 @@ function EventTypeCard({ name, description, doc, origin }: {
   )
 }
 
+const TOKEN_STORAGE_KEY = 'openalice.webhookTryItToken'
+
 function TryItForm() {
   const [prompt, setPrompt] = useState('Check if BTC moved more than 5% in the last hour.')
+  const [token, setToken] = useState(() => {
+    try { return localStorage.getItem(TOKEN_STORAGE_KEY) ?? '' } catch { return '' }
+  })
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<EventLogEntry | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -181,7 +275,12 @@ function TryItForm() {
     setResult(null)
     setError(null)
     try {
-      const entry = await api.events.ingest('task.requested', { prompt: prompt.trim() })
+      try { localStorage.setItem(TOKEN_STORAGE_KEY, token) } catch { /* storage disabled */ }
+      const entry = await api.events.ingest(
+        'task.requested',
+        { prompt: prompt.trim() },
+        { token: token.trim() || undefined },
+      )
       setResult(entry)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -199,6 +298,14 @@ function TryItForm() {
           the reply will be dispatched to whichever connector you last used.
         </p>
       </div>
+
+      <input
+        type="password"
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        placeholder="Bearer token (from data/config/webhook.json)"
+        className="w-full bg-bg-tertiary border border-border rounded-md px-3 py-2 text-xs font-mono text-text outline-none focus:border-accent"
+      />
 
       <textarea
         value={prompt}
@@ -225,6 +332,10 @@ function TryItForm() {
           <span className="text-[12px] text-red">{error}</span>
         )}
       </div>
+
+      <p className="text-[11px] text-text-muted">
+        Token is cached in this browser's localStorage for your convenience — clear it by emptying the field and sending.
+      </p>
     </div>
   )
 }
@@ -266,6 +377,8 @@ export function AutomationWebhookSection() {
         </div>
 
         <EndpointCard />
+
+        <AuthStatusCard />
 
         <div>
           <div className="text-xs uppercase tracking-wide text-text-muted mb-2">
