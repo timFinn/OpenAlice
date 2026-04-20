@@ -25,6 +25,11 @@ export class MaxExposureGuard implements OperationGuard {
     if (ctx.operation.action !== 'placeOrder') return null
 
     const { positions, account, operation } = ctx
+    const { order } = operation
+
+    // SELL reduces long exposure (or is a short-cover) — cannot breach an exposure cap
+    if (order.action === 'SELL') return null
+
     const equity = Number(account.netLiquidation)
     if (equity <= 0) return null
 
@@ -32,7 +37,6 @@ export class MaxExposureGuard implements OperationGuard {
     const currentExposure = positions.reduce((sum, p) => sum + Math.abs(Number(p.marketValue)), 0)
 
     // Estimate added exposure from this order
-    const { order } = operation
     const cashQty = order.cashQty !== UNSET_DOUBLE ? order.cashQty : undefined
     const qty = !order.totalQuantity.equals(UNSET_DECIMAL) ? order.totalQuantity.toNumber() : undefined
 

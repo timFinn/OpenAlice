@@ -121,6 +121,42 @@ describe('MaxPositionSizeGuard', () => {
     })
     expect(guard.check(ctx)).toBeNull()
   })
+
+  it('allows SELL (trim) even when existing position is near the cap', () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({
+        symbol: 'QQQ',
+        action: 'SELL',
+        totalQuantity: new Decimal(10),
+      }),
+      positions: [makePosition({
+        contract: makeContract({ symbol: 'QQQ' }),
+        marketValue: '20704',
+        marketPrice: '647',
+      })],
+      account: { netLiquidation: '99651' },
+    })
+    expect(guard.check(ctx)).toBeNull()
+  })
+
+  it('allows SELL regardless of size (reducing exposure never breaches cap)', () => {
+    const guard = new MaxPositionSizeGuard({ maxPercentOfEquity: 25 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({
+        symbol: 'QQQ',
+        action: 'SELL',
+        totalQuantity: new Decimal(18),
+      }),
+      positions: [makePosition({
+        contract: makeContract({ symbol: 'QQQ' }),
+        marketValue: '20704',
+        marketPrice: '647',
+      })],
+      account: { netLiquidation: '99651' },
+    })
+    expect(guard.check(ctx)).toBeNull()
+  })
 })
 
 // ==================== CooldownGuard ====================
@@ -449,6 +485,24 @@ describe('MaxExposureGuard', () => {
       account: { netLiquidation: '100000' },
     })
     // Can't estimate added exposure for new symbol with qty-based order
+    expect(guard.check(ctx)).toBeNull()
+  })
+
+  it('allows SELL (trim) even when exposure is at the cap', () => {
+    const guard = new MaxExposureGuard({ maxExposurePercent: 25 })
+    const ctx = makeContext({
+      operation: makePlaceOrderOp({
+        symbol: 'QQQ',
+        action: 'SELL',
+        totalQuantity: new Decimal(10),
+      }),
+      positions: [makePosition({
+        contract: makeContract({ symbol: 'QQQ' }),
+        marketValue: '20704',
+        marketPrice: '647',
+      })],
+      account: { netLiquidation: '99651' },
+    })
     expect(guard.check(ctx)).toBeNull()
   })
 })
