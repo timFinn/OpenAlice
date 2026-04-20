@@ -16,13 +16,16 @@ export class MaxPositionSizeGuard implements OperationGuard {
     if (ctx.operation.action !== 'placeOrder') return null
 
     const { positions, account, operation } = ctx
+    const { order } = operation
     const symbol = operation.contract.symbol
+
+    // SELL reduces long position size — cannot breach a max-size cap
+    if (order.action === 'SELL') return null
 
     const existing = positions.find(p => p.contract.symbol === symbol)
     const currentValue = new Decimal(existing?.marketValue ?? '0')
 
     // Estimate added value from IBKR Order fields
-    const { order } = operation
     const cashQty = order.cashQty !== UNSET_DOUBLE ? order.cashQty : undefined
     const qty = !order.totalQuantity.equals(UNSET_DECIMAL) ? order.totalQuantity : undefined
 
