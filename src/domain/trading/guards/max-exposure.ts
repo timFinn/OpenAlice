@@ -8,7 +8,7 @@
  * position value cannot exceed $100k. Set >100 to allow leverage.
  */
 
-import { UNSET_DOUBLE, UNSET_DECIMAL } from '@traderalice/ibkr'
+import { UNSET_DECIMAL } from '@traderalice/ibkr'
 import type { OperationGuard, GuardContext } from './types.js'
 
 const DEFAULT_MAX_EXPOSURE_PERCENT = 100
@@ -37,7 +37,7 @@ export class MaxExposureGuard implements OperationGuard {
     const currentExposure = positions.reduce((sum, p) => sum + Math.abs(Number(p.marketValue)), 0)
 
     // Estimate added exposure from this order
-    const cashQty = order.cashQty !== UNSET_DOUBLE ? order.cashQty : undefined
+    const cashQty = !order.cashQty.equals(UNSET_DECIMAL) ? order.cashQty.toNumber() : undefined
     const qty = !order.totalQuantity.equals(UNSET_DECIMAL) ? order.totalQuantity.toNumber() : undefined
 
     let addedExposure = 0
