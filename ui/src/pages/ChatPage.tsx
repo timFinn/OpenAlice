@@ -62,19 +62,39 @@ export function ChatPage({ onSSEStatus }: ChatPageProps) {
 
   useEffect(scrollToBottom, [messages, isWaiting, streamSegments, scrollToBottom])
 
-  // Detect user scroll
+  // Detect user scroll.
+  // Why wheel/touchmove: during streaming, scrollIntoView fires every render
+  // and races the async `scroll` event — user's scroll intent is overwritten
+  // before userScrolledUp can flip. Wheel/touchmove fire synchronously, so we
+  // set the flag before the next auto-scroll can run.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const onScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = el
-      const isUp = scrollHeight - scrollTop - clientHeight > 80
+      const isUp = scrollHeight - scrollTop - clientHeight > 20
       userScrolledUp.current = isUp
       setShowScrollBtn(isUp)
       if (!isUp) setNewMsgCount(0)
     }
-    el.addEventListener('scroll', onScroll)
-    return () => el.removeEventListener('scroll', onScroll)
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) {
+        userScrolledUp.current = true
+        setShowScrollBtn(true)
+      }
+    }
+    const onTouchMove = () => {
+      userScrolledUp.current = true
+      setShowScrollBtn(true)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchmove', onTouchMove)
+    }
   }, [])
 
   // Load channels list on mount
